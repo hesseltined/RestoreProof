@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RestoreProof — Product &amp; Implementation Plan</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --surface: #ffffff;
+      --text: #1a2332;
+      --muted: #5a6a7a;
+      --accent: #0d9488;
+      --border: #d8e0e8;
+      --code-bg: #eef2f6;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f1419;
+        --surface: #1a2332;
+        --text: #e8eef4;
+        --muted: #9aabbc;
+        --accent: #2dd4bf;
+        --border: #2a3544;
+        --code-bg: #121a24;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.55;
+    }
+    .wrap { max-width: 880px; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+    header {
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 1.25rem;
+      margin-bottom: 2rem;
+    }
+    h1 { margin: 0 0 0.5rem; font-size: 1.85rem; letter-spacing: -0.02em; }
+    .overview { color: var(--muted); font-size: 1.05rem; }
+    h2 {
+      margin-top: 2.25rem;
+      font-size: 1.25rem;
+      color: var(--accent);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.35rem;
+    }
+    h3 { font-size: 1.05rem; margin-top: 1.5rem; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      font-size: 0.95rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.65rem 0.85rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    th { background: var(--code-bg); font-weight: 600; }
+    tr:last-child td { border-bottom: none; }
+    ul, ol { padding-left: 1.35rem; }
+    li { margin: 0.35rem 0; }
+    code, pre {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 0.88em;
+      background: var(--code-bg);
+      border-radius: 4px;
+    }
+    code { padding: 0.1em 0.35em; }
+    pre {
+      padding: 1rem;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+    }
+    .meta {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-top: 0.75rem;
+    }
+    .arch {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      font-family: ui-monospace, monospace;
+      font-size: 0.85rem;
+      white-space: pre;
+      overflow-x: auto;
+    }
+    footer {
+      margin-top: 3rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>RestoreProof — Product &amp; Implementation Plan</h1>
+      <p class="overview">
+        RestoreProof is a Dockerized, community-edition Proxmox restore-drill appliance (Ubuntu LXC host)
+        that uses the Proxmox API (SSH only for screenshots), runs one full restore→boot→screenshot→cleanup
+        cycle at a time from PBS backups, and emails results—with a modern dual-theme admin UI and a clear
+        backlog for paid/community upgrades.
+      </p>
+      <p class="meta">Saved as Plan-original.html · Author: Doug Hesseltine · Community edition (Apache-2.0)</p>
+    </header>
+
+    <h2>Product summary</h2>
+    <p>
+      <strong>RestoreProof</strong> is a self-hosted restore-verification tool for Proxmox. Admins deploy it as
+      Docker on an Ubuntu LXC, connect one or more Proxmox API endpoints (standalone host or cluster node), and
+      run automated non-destructive restore drills: restore latest PBS backup to a temporary ID, detach NICs,
+      boot, screenshot, cleanup, email, and show proof in the UI.
+    </p>
+    <p><strong>Positioning:</strong> Free community edition (open source) with a documented path for future paid extras—no paid features in v1.</p>
+    <p><strong>Docker image (planned):</strong> <code>hesseltined/restoreproof</code> (compose-first install).</p>
+
+    <h2>Locked decisions</h2>
+    <table>
+      <thead><tr><th>Area</th><th>Choice</th></tr></thead>
+      <tbody>
+        <tr><td>Proxmox access</td><td>API token primary; SSH key secondary (screenshots / QMP)</td></tr>
+        <tr><td>Hosts</td><td>Multi-connection: each endpoint = standalone host or cluster; add independent DC hosts</td></tr>
+        <tr><td>Isolation</td><td>Detach all NICs on test guest before first boot</td></tr>
+        <tr><td>Guests</td><td>QEMU VMs and LXC CTs</td></tr>
+        <tr><td>Success (v1)</td><td>Restore OK + start OK + screenshot/evidence captured (admin judges image)</td></tr>
+        <tr><td>Backups (v1)</td><td>PBS only</td></tr>
+        <tr><td>Schedule</td><td>Global default cron + per-guest overrides + exclude + Run now</td></tr>
+        <tr><td>Concurrency</td><td>Global single-flight lock (one test at a time)</td></tr>
+        <tr><td>Test IDs</td><td>Pool 9000–9099 (configurable), next free</td></tr>
+        <tr><td>Auth</td><td>Local users, password reset email, TOTP 2FA; OIDC later</td></tr>
+        <tr><td>Notify (v1)</td><td>SMTP only + provider presets</td></tr>
+        <tr><td>Restore storage</td><td>Prefer dedicated test storage after preflight checks; else original storage</td></tr>
+        <tr><td>Retention</td><td>Configurable (days + max runs); keep latest per guest</td></tr>
+        <tr><td>UI</td><td>Collapsible sidebar (full nav everywhere); light default + dark toggle</td></tr>
+        <tr><td>Name</td><td><strong>RestoreProof</strong></td></tr>
+      </tbody>
+    </table>
+
+    <h2>Architecture</h2>
+    <div class="arch">Admin Browser → RestoreProof Web → RestoreProof API → Postgres
+                      ↘ Restore Worker → Proxmox API → PBS
+                                      → Proxmox SSH/QMP
+                                      → SMTP</div>
+    <p><strong>Runtime (Docker Compose):</strong></p>
+    <ul>
+      <li><code>web</code> — React + Vite + TypeScript SPA</li>
+      <li><code>api</code> — FastAPI (Python) — auth, config, guest inventory, job enqueue</li>
+      <li><code>worker</code> — same image, different command — schedule + restore pipeline</li>
+      <li><code>db</code> — PostgreSQL</li>
+      <li>Optional Caddy/nginx — TLS terminator</li>
+    </ul>
+    <p><strong>Deploy target:</strong> Ubuntu LXC on Proxmox with Docker (<code>nesting=1</code>, <code>keyctl</code>, fuse as needed).</p>
+
+    <h2>Core restore cycle (v1)</h2>
+    <ol>
+      <li>Acquire global lock (fail or queue if busy).</li>
+      <li>Resolve guest (VM or CT), host connection, latest PBS snapshot.</li>
+      <li>Preflight: free ID in test pool; enough space on preferred restore storage (else fallback); PBS reachable.</li>
+      <li>Restore to temp ID with unique identity (new MAC/UUID).</li>
+      <li>Detach all network devices before start.</li>
+      <li>Start guest; wait configurable boot delay (default ~60s).</li>
+      <li>Capture evidence (VM: QMP screendump; CT: status/uptime proof).</li>
+      <li>Stop + destroy/purge temp guest (always attempt cleanup in finally).</li>
+      <li>Persist run record + artifact; send SMTP success/failure.</li>
+      <li>Release lock.</li>
+    </ol>
+    <p><strong>Original guest stays online.</strong> No production shutdown for tests.</p>
+
+    <h2>App modules / UI map</h2>
+    <ul>
+      <li><strong>Dashboard</strong> — last runs, pass/fail, next scheduled, active lock status</li>
+      <li><strong>Guests</strong> — inventory; exclude; per-guest schedule override; Run now</li>
+      <li><strong>Runs</strong> — history, screenshot/evidence viewer, email resend</li>
+      <li><strong>Hosts</strong> — API URL, token, SSH key, PBS/storage, test ID pool</li>
+      <li><strong>Schedule</strong> — global cron + rotation policy</li>
+      <li><strong>Notifications</strong> — SMTP presets, templates, test email</li>
+      <li><strong>Users</strong> — admins, reset, 2FA</li>
+      <li><strong>Settings</strong> — boot wait, retention, branding</li>
+      <li><strong>Setup wizard</strong> — first-run flow</li>
+    </ul>
+
+    <h2>Security model</h2>
+    <ul>
+      <li>Proxmox API token with least privilege; documented ACL.</li>
+      <li>Dedicated SSH key for screendump / qm / pct.</li>
+      <li>Secrets encrypted at rest; tokens never shown in full after save.</li>
+    </ul>
+
+    <h2>Community packaging</h2>
+    <ul>
+      <li>GitHub: <code>hesseltined/RestoreProof</code></li>
+      <li>License: Apache-2.0</li>
+      <li><code>docker-compose.yml</code> + <code>.env.example</code> + <code>INSTALL-LXC.md</code></li>
+      <li>Forum-ready README and roadmap (future/paid path; no paywall in v1)</li>
+    </ul>
+
+    <h2>Explicit future features (backlog)</h2>
+    <ul>
+      <li>vzdump/non-PBS backup sources</li>
+      <li>OIDC</li>
+      <li>Webhooks / Slack / Discord</li>
+      <li>Guest probes (ping/HTTP)</li>
+      <li>Isolated bridge/VLAN mode</li>
+      <li>Per-host concurrency</li>
+      <li>Paid extras path (multi-tenant, HA worker, support packs)—not built in v1</li>
+    </ul>
+
+    <h2>Implementation phases</h2>
+    <ol>
+      <li>Skeleton — Compose, Postgres models, auth + 2FA + password reset, shell UI with nav/theme</li>
+      <li>Hosts — API client, SSH key helper, preflight checks, guest sync</li>
+      <li>Worker — full VM cycle + CT cycle + global lock + cleanup guarantees</li>
+      <li>Schedule + Guests UI — exclude, overrides, run now, rotation</li>
+      <li>SMTP presets + run emails + Runs gallery</li>
+      <li>Polish — setup wizard, LXC install docs, forum post, retention job</li>
+    </ol>
+
+    <h2>Out of scope for v1</h2>
+    <ul>
+      <li>Powering off production guests for tests</li>
+      <li>Restoring over the original VMID</li>
+      <li>Non-PBS backups</li>
+      <li>Concurrent restores</li>
+      <li>Marketplace billing / license servers</li>
+    </ul>
+
+    <footer>
+      RestoreProof community edition · Plan snapshot for project archival · © Doug Hesseltine
+    </footer>
+  </div>
+</body>
+</html>

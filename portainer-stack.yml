@@ -1,0 +1,87 @@
+# RestoreProof — Portainer / Docker Compose stack (pre-built images)
+# Author: Doug Hesseltine
+# Created: 2026-07-12
+# Modified: 2026-07-12
+# Version: 1.1.0
+#
+# Deploy in Portainer: Stacks → Add stack → Web editor → paste this file.
+# Set stack environment variables (or use .env) before deploy:
+#   POSTGRES_PASSWORD, SECRET_KEY, APP_BASE_URL, CORS_ORIGINS, WEB_PORT
+#
+# Images (Docker Hub):
+#   hesseltined/restoreproof-api  — API + worker
+#   hesseltined/restoreproof-web  — UI (nginx proxies /api → api:8000)
+#
+# Docs: https://github.com/hesseltined/RestoreProof
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-restoreproof}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: ${POSTGRES_DB:-restoreproof}
+    volumes:
+      - rp_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-restoreproof}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    image: hesseltined/restoreproof-api:${RESTOREPROOF_TAG:-latest}
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-restoreproof}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-restoreproof}
+      SECRET_KEY: ${SECRET_KEY:-change-me-to-a-long-random-string-at-least-32-chars}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3080}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3080}
+      DATA_DIR: /data
+      DEFAULT_BOOT_WAIT_SECONDS: ${DEFAULT_BOOT_WAIT_SECONDS:-60}
+    volumes:
+      - rp_data:/data
+      - rp_ssh:/root/.ssh
+    # Optional: expose API directly (usually leave closed; UI proxies /api)
+    # ports:
+    #   - "${API_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    image: hesseltined/restoreproof-api:${RESTOREPROOF_TAG:-latest}
+    command: python -m app.worker
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-restoreproof}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-restoreproof}
+      SECRET_KEY: ${SECRET_KEY}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3080}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3080}
+      DATA_DIR: /data
+      DEFAULT_BOOT_WAIT_SECONDS: ${DEFAULT_BOOT_WAIT_SECONDS:-60}
+    volumes:
+      - rp_data:/data
+      - rp_ssh:/root/.ssh
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+  web:
+    image: hesseltined/restoreproof-web:${RESTOREPROOF_TAG:-latest}
+    ports:
+      - "${WEB_PORT:-3080}:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  rp_pgdata:
+  rp_data:
+  rp_ssh:

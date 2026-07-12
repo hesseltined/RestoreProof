@@ -1,0 +1,10 @@
+# Purpose: Ignore files for API Docker build context
+# Author: Doug Hesseltine
+# Created: 2026-07-12
+# Version: 1.0.0
+
+.venv
+__pycache__
+*.pyc
+.env
+.pytest_cache

@@ -1,0 +1,77 @@
+# RestoreProof — Docker Compose stack (build from source)
+# Author: Doug Hesseltine
+# Created: 2026-07-12
+# Modified: 2026-07-12
+# Version: 1.1.0
+#
+# For Portainer / Hub images, use portainer-stack.yml instead.
+# Avoid `docker compose up --build` while a restore is running (restarts worker).
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-restoreproof}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-restoreproof}
+      POSTGRES_DB: ${POSTGRES_DB:-restoreproof}
+    volumes:
+      - rp_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-restoreproof}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-restoreproof}:${POSTGRES_PASSWORD:-restoreproof}@db:5432/${POSTGRES_DB:-restoreproof}
+    volumes:
+      - rp_data:/data
+      - rp_ssh:/root/.ssh
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: python -m app.worker
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-restoreproof}:${POSTGRES_PASSWORD:-restoreproof}@db:5432/${POSTGRES_DB:-restoreproof}
+    volumes:
+      - rp_data:/data
+      - rp_ssh:/root/.ssh
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-}
+    ports:
+      - "${WEB_PORT:-3080}:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  rp_pgdata:
+  rp_data:
+  rp_ssh:

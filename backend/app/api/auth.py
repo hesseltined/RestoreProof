@@ -57,7 +57,7 @@ def status_endpoint(db: Session = Depends(get_db)) -> StatusOut:
 def setup_admin(body: SetupAdminRequest, db: Session = Depends(get_db)) -> TokenResponse:
     ensure_defaults(db)
     settings = get_app_settings(db)
-    if db.query(User).count() > 0 or settings.setup_completed:
+    if db.query(User).count() > 0:
         raise HTTPException(status_code=400, detail="Setup already completed")
     user = User(
         email=body.email.lower(),

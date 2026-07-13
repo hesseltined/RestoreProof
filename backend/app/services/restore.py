@@ -3,7 +3,7 @@ Purpose: Full restore → boot → evidence → cleanup cycle for one guest.
 Author: Doug Hesseltine
 Created: 2026-07-12
 Modified: 2026-07-12
-Version: 1.2.1
+Version: 1.7.0
 """
 
 from __future__ import annotations
@@ -25,8 +25,14 @@ from app.models import Guest, ProxmoxHost, RestoreRun
 from app.security import decrypt_secret
 from app.services import locks
 from app.services.bootstrap import get_app_settings
+from app.services.email_templates import build_notification_context, screenshot_attachment
 from app.services.mailer import parse_addr_list, send_email
-from app.services.proxmox import ProxmoxAPIError, ProxmoxClient
+from app.services.proxmox import (
+    ProxmoxAPIError,
+    ProxmoxClient,
+    is_hostdev_privilege_error,
+    qemu_hostdev_keys,
+)
 from app.services.ssh_keys import SSHSession
 
 logger = logging.getLogger(__name__)
@@ -109,6 +115,181 @@ def pick_restore_storage(
         if sid and usable(sid):
             return sid
     return None
+
+
+def storage_hint_from_guest_config(cfg: dict, guest_type: str) -> Optional[str]:
+    """Best-effort storage id from the source guest's first disk (e.g. VMs:vm-101-disk-1)."""
+    if guest_type == "qemu":
+        prefixes = ("scsi", "ide", "sata", "virtio", "efidisk", "tpm")
+    else:
+        prefixes = ("rootfs", "mp")
+    for key, raw in cfg.items():
+        ks = str(key)
+        if not any(ks == p or ks.startswith(p) for p in prefixes):
+            continue
+        val = str(raw or "")
+        if ":" not in val:
+            continue
+        sid = val.split(":", 1)[0].strip()
+        if sid:
+            return sid
+    return None
+
+
+def is_pbs_data_error(exc: BaseException) -> bool:
+    """True when PBS cannot read/verify backup data (missing chunk, corrupt snapshot, etc.)."""
+    msg = str(exc).lower()
+    if ".chunks/" in msg:
+        return True
+    if "no such file or directory" in msg and ("chunk" in msg or "pbs-restore" in msg or "backup" in msg):
+        return True
+    if "not completely restored" in msg:
+        return True
+    if "download and verify" in msg and "failed" in msg:
+        return True
+    if "reading file" in msg and "failed" in msg:
+        return True
+    return False
+
+
+def should_try_older_backup(exc: BaseException) -> bool:
+    """Whether a failed restore of one snapshot should fall through to an older backup."""
+    if is_hostdev_privilege_error(exc):
+        return False
+    msg = str(exc).lower()
+    if "ssh is required" in msg:
+        return False
+    if "global restore lock" in msg:
+        return False
+    if "no free test vmid" in msg:
+        return False
+    if "no restore storage" in msg:
+        return False
+    # Snapshot-specific restore failures (PBS data, qmrestore/pct, Proxmox task) → try older
+    return True
+
+
+def _backup_ctime_label(backup: dict) -> str:
+    ctime = backup.get("ctime")
+    if ctime is None:
+        return ""
+    try:
+        return datetime.fromtimestamp(int(ctime), tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    except (TypeError, ValueError, OSError):
+        return ""
+
+
+def format_backup_inventory(backups: list[dict], *, limit: int = 12) -> str:
+    """Human-readable list of available PBS backups (newest first)."""
+    lines: list[str] = []
+    for i, b in enumerate(backups[:limit], start=1):
+        volid = str(b.get("volid") or "")
+        when = _backup_ctime_label(b)
+        size = b.get("size")
+        size_s = ""
+        if isinstance(size, (int, float)) and size > 0:
+            gib = float(size) / (1024**3)
+            size_s = f", ~{gib:.1f} GiB" if gib >= 1 else f", ~{float(size) / (1024**2):.0f} MiB"
+        tag = " [LATEST]" if i == 1 else ""
+        when_s = f" ({when}{size_s})" if when or size_s else ""
+        lines.append(f"  {i}. {volid}{when_s}{tag}")
+    if len(backups) > limit:
+        lines.append(f"  … and {len(backups) - limit} more")
+    return "\n".join(lines)
+
+
+def build_env_diagnostics(
+    *,
+    host: ProxmoxHost,
+    guest: Guest,
+    node: str,
+    guest_type: str,
+    test_vmid: Optional[int],
+    storage: Optional[str],
+    backups: list[dict],
+    latest_volid: str,
+    used_volid: str,
+    used_index: Optional[int],
+    attempted: int,
+    used_fallback: bool,
+    restore_method: str,
+    source_hostdevs: list[str],
+    ssh_ready: bool,
+    failed_newer: list[tuple[str, str]],
+    manual_cmd: str = "",
+    success: bool,
+) -> str:
+    """Clear summary for UI/email: backup inventory + environment context."""
+    total = len(backups)
+    lines: list[str] = []
+
+    if success and used_fallback:
+        lines.append(
+            "⚠ NOT THE LATEST BACKUP — RestoreProof used an older snapshot because "
+            "one or more newer backups failed to restore."
+        )
+        lines.append(
+            f"Used backup #{used_index} of {total} available (1 = newest)."
+        )
+        lines.append(f"Used:    {used_volid}")
+        lines.append(f"Latest:  {latest_volid}  ← failed; see log for details")
+        if failed_newer:
+            lines.append("Newer backups that failed:")
+            for vol, err in failed_newer:
+                short = err.replace("\n", " ")
+                if len(short) > 180:
+                    short = short[:177] + "…"
+                lines.append(f"  - {vol}")
+                lines.append(f"    {short}")
+        lines.append(
+            "Action: verify/repair the latest PBS snapshot, or take a fresh backup of this guest."
+        )
+    elif success:
+        lines.append(f"Restored from the latest backup (1 of {total} available).")
+        lines.append(f"Backup: {used_volid}")
+    else:
+        lines.append(f"Restore FAILED after trying {attempted} of {total} available backup(s).")
+        lines.append(f"Last tried: {used_volid or '(none)'}")
+        if latest_volid:
+            lines.append(f"Latest available: {latest_volid}")
+        if failed_newer or attempted:
+            lines.append("Snapshots attempted (newest → older):")
+            for vol, err in failed_newer:
+                short = err.replace("\n", " ")
+                if len(short) > 180:
+                    short = short[:177] + "…"
+                lines.append(f"  - {vol}")
+                lines.append(f"    {short}")
+            if used_volid and (not failed_newer or failed_newer[-1][0] != used_volid):
+                lines.append(f"  - {used_volid} (final attempt)")
+
+    lines.append("")
+    lines.append(f"PBS backups available for VMID {guest.vmid}: {total}")
+    if backups:
+        lines.append(format_backup_inventory(backups))
+    lines.append("")
+    lines.append("Environment:")
+    lines.append(f"  Host: {host.name} ({host.api_url})")
+    lines.append(f"  Node: {node}")
+    lines.append(f"  Guest: {guest.name} (VMID {guest.vmid}, {guest_type})")
+    lines.append(f"  Test VMID: {test_vmid if test_vmid is not None else '—'}")
+    lines.append(f"  Restore storage: {storage or '—'}")
+    lines.append(f"  Restore method: {restore_method}")
+    lines.append(f"  SSH configured: {'yes' if ssh_ready else 'no'}")
+    if source_hostdevs:
+        lines.append(f"  Source host passthrough: {', '.join(source_hostdevs)}")
+    if manual_cmd:
+        lines.append("")
+        lines.append(f"Manual retry on node {node} as root:")
+        lines.append(f"  {manual_cmd}")
+    if not success:
+        lines.append("")
+        lines.append("Suggested next steps:")
+        lines.append("  1. Confirm the same qmrestore/pct command fails in the Proxmox UI/CLI.")
+        lines.append("  2. On PBS, verify the datastore / check for missing chunks after GC.")
+        lines.append("  3. Take a fresh backup of this guest, then re-run the restore test.")
+        lines.append("  4. Until fixed, exclude this guest from the schedule to avoid repeat alerts.")
+    return "\n".join(lines)
 
 
 def cleanup_test_guest(
@@ -257,6 +438,21 @@ def sync_host_guests(db: Session, host: ProxmoxHost) -> int:
         guest.guest_type = rtype
         guest.node = res.get("node") or guest.node
         guest.status = res.get("status") or ""
+        maxcpu = res.get("maxcpu")
+        try:
+            guest.cpu_cores = int(maxcpu) if maxcpu is not None else None
+        except (TypeError, ValueError):
+            guest.cpu_cores = None
+        maxmem = res.get("maxmem")
+        try:
+            guest.memory_bytes = int(maxmem) if maxmem is not None else None
+        except (TypeError, ValueError):
+            guest.memory_bytes = None
+        maxdisk = res.get("maxdisk")
+        try:
+            guest.disk_bytes = int(maxdisk) if maxdisk is not None else None
+        except (TypeError, ValueError):
+            guest.disk_bytes = None
         count += 1
 
     existing = db.query(Guest).filter(Guest.host_id == host.id).all()
@@ -281,25 +477,26 @@ async def notify_run(db: Session, run: RestoreRun) -> None:
         return
     cc_addrs = parse_addr_list(settings.notify_cc)
     app_url = get_settings().app_base_url.rstrip("/")
-    ctx = {
-        "guest_name": run.source_name,
-        "vmid": run.source_vmid,
-        "test_vmid": run.test_vmid or "",
-        "backup_volid": run.backup_volid,
-        "error_message": run.error_message or "",
-        "started_at": run.started_at.isoformat() if run.started_at else "",
-        "finished_at": run.finished_at.isoformat() if run.finished_at else "",
-        "run_url": f"{app_url}/runs/{run.id}",
-        "status": run.status,
-    }
+    ctx = build_notification_context(run, app_url)
     if run.status == "success":
         subject = Template(settings.email_success_subject).render(**ctx)
         body = Template(settings.email_success_body).render(**ctx)
     else:
         subject = Template(settings.email_failure_subject).render(**ctx)
         body = Template(settings.email_failure_body).render(**ctx)
+    inline_images = []
+    shot = screenshot_attachment(run)
+    if shot:
+        inline_images.append(shot)
     try:
-        await send_email(db, to_addrs=to_addrs, subject=subject, body=body, cc_addrs=cc_addrs)
+        await send_email(
+            db,
+            to_addrs=to_addrs,
+            subject=subject,
+            body=body,
+            cc_addrs=cc_addrs,
+            inline_images=inline_images or None,
+        )
         _log(run, "Notification email sent")
     except Exception as exc:  # noqa: BLE001
         _log(run, f"Email failed: {exc}")
@@ -331,6 +528,7 @@ def execute_restore_run(db: Session, run_id: int) -> None:
     guest: Optional[Guest] = None
     client: Optional[ProxmoxClient] = None
     test_vmid: Optional[int] = None
+    storage: Optional[str] = None
     node = ""
     guest_type = run.guest_type
 
@@ -355,11 +553,20 @@ def execute_restore_run(db: Session, run_id: int) -> None:
         backups = client.find_pbs_backups(node, guest.vmid)
         if not backups:
             raise RuntimeError(f"No PBS backups found for VMID {guest.vmid} on node {node}")
-        latest = backups[0]
-        archive = latest.get("volid")
-        run.backup_volid = archive or ""
-        _set_progress(db, run, pct=8.0, label="Backup selected")
-        _log(run, f"Selected backup {archive}")
+
+        total_backups = len(backups)
+        latest_volid = str(backups[0].get("volid") or "")
+        run.backup_count = total_backups
+        run.latest_backup_volid = latest_volid
+        run.used_fallback_backup = False
+        run.backups_attempted = 0
+        run.backup_used_index = None
+        run.result_summary = ""
+        _log(
+            run,
+            f"Found {total_backups} PBS backup(s) for VMID {guest.vmid} (newest first):\n"
+            f"{format_backup_inventory(backups)}",
+        )
         db.commit()
 
         test_vmid = pick_test_vmid(client, host)
@@ -368,86 +575,392 @@ def execute_restore_run(db: Session, run_id: int) -> None:
         _log(run, f"Allocated test VMID {test_vmid}")
         db.commit()
 
+        ssh_ready = bool(host.ssh_host and host.ssh_private_key_path)
+        source_hostdevs: list[str] = []
+        source_cfg: dict = {}
+        if guest_type == "qemu":
+            try:
+                source_cfg = client.qemu_config(node, guest.vmid)
+                source_hostdevs = qemu_hostdev_keys(source_cfg)
+            except Exception as exc:  # noqa: BLE001
+                _log(run, f"Could not inspect source config for host devices: {exc}")
+
+        storage_hint = storage_hint_from_guest_config(source_cfg, guest_type) if source_cfg else None
         storage = pick_restore_storage(
-            client, host, node, host.preferred_restore_storage, guest_type=guest_type
+            client,
+            host,
+            node,
+            storage_hint or host.preferred_restore_storage or "",
+            guest_type=guest_type,
         )
         if not storage:
             raise RuntimeError(
                 f"No restore storage on node {node} with content type "
                 f"{'images' if guest_type == 'qemu' else 'rootdir'}"
             )
-        _log(run, f"Restore storage: {storage}")
+        if storage_hint and storage == storage_hint:
+            _log(run, f"Restore storage: {storage} (from source guest disks)")
+        else:
+            _log(run, f"Restore storage: {storage}")
         db.commit()
 
-        if guest_type == "qemu":
-            upid = client.restore_qemu(
-                node, test_vmid, archive, storage=storage, unique=True, start=False
+        def _open_ssh() -> SSHSession:
+            if not ssh_ready:
+                raise RuntimeError(
+                    "SSH is required to restore guests with host USB/PCI passthrough "
+                    "(API tokens cannot apply those devices). Configure SSH on the host."
+                )
+            return SSHSession(
+                host.ssh_host, host.ssh_port, host.ssh_user, host.ssh_private_key_path
             )
-        else:
-            upid = client.restore_lxc(
-                node, test_vmid, archive, storage=storage, unique=True, start=False
+
+        def _cleanup_partial() -> None:
+            try:
+                ssh_tmp = None
+                if ssh_ready:
+                    try:
+                        ssh_tmp = SSHSession(
+                            host.ssh_host, host.ssh_port, host.ssh_user, host.ssh_private_key_path
+                        )
+                        ssh_tmp.__enter__()
+                    except Exception:  # noqa: BLE001
+                        ssh_tmp = None
+                try:
+                    cleanup_test_guest(client, guest_type, node, int(test_vmid), ssh=ssh_tmp)
+                finally:
+                    if ssh_tmp is not None:
+                        try:
+                            ssh_tmp.__exit__(None, None, None)
+                        except Exception:  # noqa: BLE001
+                            pass
+            except Exception as cleanup_exc:  # noqa: BLE001
+                _log(run, f"Partial cleanup of test VMID {test_vmid}: {cleanup_exc}")
+
+        def _manual_restore_cmd(archive_vol: str) -> str:
+            if guest_type == "qemu":
+                return SSHSession.format_qmrestore_cmd(
+                    str(archive_vol), int(test_vmid), storage=storage, unique=True
+                )
+            return SSHSession.format_pct_restore_cmd(
+                str(archive_vol), int(test_vmid), storage=storage, unique=True
             )
-        _set_progress(
-            db,
-            run,
-            pct=12.0,
-            label="Restoring from PBS…",
-            upid=str(upid),
-            node=node,
-        )
-        _log(run, f"Restore started: {upid}")
-        db.commit()
+
+        def _log_manual_cmd(archive_vol: str, *, via: str) -> None:
+            cmd = _manual_restore_cmd(archive_vol)
+            _log(
+                run,
+                f"Restore command ({via}) — run on Proxmox node {node} as root to troubleshoot:\n"
+                f"  {cmd}",
+            )
+
+        def _restore_qemu_via_ssh(archive_vol: str, reason: str) -> None:
+            _log(run, reason)
+            _log_manual_cmd(archive_vol, via="SSH qmrestore")
+            _set_progress(
+                db,
+                run,
+                pct=12.0,
+                label="Restoring via SSH (USB/PCI passthrough)…",
+                node=node,
+            )
+            db.commit()
+            with _open_ssh() as ssh:
+                out = ssh.qmrestore(str(archive_vol), int(test_vmid), storage=storage, unique=True)
+            if out:
+                tail = out[-500:] if len(out) > 500 else out
+                _log(run, f"SSH qmrestore finished: {tail}")
+
+        def _restore_via_api(archive_vol: str) -> None:
+            nonlocal last_logged_pct, last_heartbeat_log
+            _log_manual_cmd(archive_vol, via="API (CLI equivalent)")
+            if guest_type == "qemu":
+                upid = client.restore_qemu(
+                    node, test_vmid, archive_vol, storage=storage, unique=True, start=False
+                )
+            else:
+                upid = client.restore_lxc(
+                    node, test_vmid, archive_vol, storage=storage, unique=True, start=False
+                )
+            _set_progress(
+                db,
+                run,
+                pct=12.0,
+                label="Restoring from PBS…",
+                upid=str(upid),
+                node=node,
+            )
+            _log(run, f"Restore started: {upid}")
+            db.commit()
+
+            def _restore_progress(status: dict) -> None:
+                nonlocal last_logged_pct, last_heartbeat_log
+                prox_pct = client.task_progress_pct(node, str(upid), status=status)
+                if prox_pct is not None:
+                    pct = 12.0 + (prox_pct * 0.68)
+                    _set_progress(
+                        db,
+                        run,
+                        pct=pct,
+                        label=f"Restoring from PBS… {round(prox_pct)}% on Proxmox",
+                    )
+                    rounded = round(pct)
+                    if last_logged_pct is None or abs(rounded - (last_logged_pct or 0)) >= 5:
+                        _log(
+                            run,
+                            f"Restore progress ~{rounded}% (Proxmox reported {round(prox_pct)}%)",
+                        )
+                        last_logged_pct = float(rounded)
+                else:
+                    _set_progress(
+                        db,
+                        run,
+                        pct=None,
+                        label="Restoring from PBS… (Proxmox transferring data; no % yet)",
+                    )
+                    now = time.time()
+                    if now - last_heartbeat_log >= 60:
+                        task_st = (status or {}).get("status") or "running"
+                        _log(
+                            run,
+                            f"Restore still running on Proxmox (task {task_st}; "
+                            "no percentage reported — large disk transfers can take a while)",
+                        )
+                        last_heartbeat_log = now
+                db.commit()
+
+            client.wait_task(
+                node, upid, timeout=7200, on_poll=_restore_progress, on_poll_every=5.0
+            )
+
+        if guest_type == "qemu" and source_hostdevs and not ssh_ready:
+            raise RuntimeError(
+                f"Source VM has host passthrough devices ({', '.join(source_hostdevs)}). "
+                "API tokens cannot restore those configs. Install the RestoreProof SSH key "
+                "on the Proxmox host and Test SSH, then retry — or exclude this guest."
+            )
 
         last_logged_pct: Optional[float] = None
         last_heartbeat_log = 0.0
+        last_backup_error: Optional[BaseException] = None
+        restored_ok = False
+        restore_method = "API"
+        failed_newer: list[tuple[str, str]] = []
+        used_idx: Optional[int] = None
+        max_try = min(5, total_backups)
 
-        def _restore_progress(status: dict) -> None:
-            nonlocal last_logged_pct, last_heartbeat_log
-            prox_pct = client.task_progress_pct(node, str(upid), status=status)
-            if prox_pct is not None:
-                # Map Proxmox 0–100 into the restore window (12–80)
-                pct = 12.0 + (prox_pct * 0.68)
+        # Try newest backups first; fall through to older snapshots on snapshot-specific failures
+        for idx, backup in enumerate(backups[:max_try]):
+            archive = str(backup.get("volid") or "")
+            if not archive:
+                continue
+            attempt_num = idx + 1
+            run.backup_volid = archive
+            run.backup_used_index = attempt_num
+            run.backups_attempted = attempt_num
+            run.used_fallback_backup = attempt_num > 1
+            if attempt_num == 1:
                 _set_progress(
                     db,
                     run,
-                    pct=pct,
-                    label=f"Restoring from PBS… {round(prox_pct)}% on Proxmox",
+                    pct=8.0,
+                    label=f"Trying latest backup (1 of {total_backups} available)",
                 )
-                rounded = round(pct)
-                if last_logged_pct is None or abs(rounded - (last_logged_pct or 0)) >= 5:
-                    _log(run, f"Restore progress ~{rounded}% (Proxmox reported {round(prox_pct)}%)")
-                    last_logged_pct = float(rounded)
+                _log(
+                    run,
+                    f"Trying LATEST backup (1 of {total_backups} available): {archive}",
+                )
             else:
-                # Many vzrestore/qmrestore tasks never expose a percentage while
-                # streaming disk data — do not invent a climbing % that caps at 75.
                 _set_progress(
                     db,
                     run,
-                    pct=None,
-                    label="Restoring from PBS… (Proxmox transferring data; no % yet)",
+                    pct=8.0,
+                    label=f"⚠ Older backup {attempt_num}/{total_backups} (latest failed)",
                 )
-                now = time.time()
-                if now - last_heartbeat_log >= 60:
-                    task_st = (status or {}).get("status") or "running"
-                    _log(
-                        run,
-                        f"Restore still running on Proxmox (task {task_st}; "
-                        "no percentage reported — large disk transfers can take a while)",
-                    )
-                    last_heartbeat_log = now
+                _log(
+                    run,
+                    f"⚠ NOT THE LATEST — trying backup {attempt_num} of {total_backups} "
+                    f"(newer snapshot(s) failed): {archive}",
+                )
             db.commit()
 
-        client.wait_task(
-            node, upid, timeout=7200, on_poll=_restore_progress, on_poll_every=5.0
+            try:
+                if guest_type == "qemu" and source_hostdevs and ssh_ready:
+                    restore_method = "SSH qmrestore (host USB/PCI passthrough)"
+                    _restore_qemu_via_ssh(
+                        archive,
+                        f"Source has host passthrough ({', '.join(source_hostdevs)}); "
+                        "restoring via SSH as root so API token USB restrictions are avoided",
+                    )
+                else:
+                    try:
+                        restore_method = "API"
+                        _restore_via_api(archive)
+                    except ProxmoxAPIError as api_exc:
+                        if guest_type == "qemu" and is_hostdev_privilege_error(api_exc) and ssh_ready:
+                            _cleanup_partial()
+                            restore_method = "SSH qmrestore (API hostdev fallback)"
+                            _restore_qemu_via_ssh(
+                                archive,
+                                f"API restore blocked by host USB/PCI ({api_exc}); "
+                                "retrying via SSH as root",
+                            )
+                        elif guest_type == "qemu" and is_hostdev_privilege_error(api_exc):
+                            raise RuntimeError(
+                                f"{api_exc} — API tokens cannot restore guests with host USB/PCI "
+                                "passthrough. Configure SSH on this host (or exclude the guest)."
+                            ) from api_exc
+                        else:
+                            raise
+                restored_ok = True
+                used_idx = attempt_num
+                run.used_fallback_backup = attempt_num > 1
+                run.backup_used_index = attempt_num
+                if attempt_num > 1:
+                    _set_progress(
+                        db,
+                        run,
+                        pct=82.0,
+                        label=f"⚠ Restored older backup #{attempt_num}/{total_backups}",
+                    )
+                    _log(
+                        run,
+                        f"⚠ Restore succeeded using OLDER backup #{attempt_num} of {total_backups} "
+                        f"— NOT the latest. Latest was: {latest_volid}",
+                    )
+                else:
+                    _set_progress(db, run, pct=82.0, label="Restore finished — configuring")
+                    _log(run, "Restore completed using the latest backup")
+                db.commit()
+                break
+            except Exception as bak_exc:  # noqa: BLE001
+                last_backup_error = bak_exc
+                failed_newer.append((archive, str(bak_exc)))
+                _log(
+                    run,
+                    f"Restore failed for this snapshot. Manual retry on node {node} as root:\n"
+                    f"  {_manual_restore_cmd(archive)}",
+                )
+                if should_try_older_backup(bak_exc) and attempt_num < max_try:
+                    why = (
+                        "incomplete/corrupt on PBS"
+                        if is_pbs_data_error(bak_exc)
+                        else "restore failed"
+                    )
+                    _log(
+                        run,
+                        f"Backup {attempt_num} of {total_backups} {why}. "
+                        f"Falling back to next-older snapshot "
+                        f"({attempt_num + 1} of {total_backups})…",
+                    )
+                    _cleanup_partial()
+                    db.commit()
+                    continue
+                run.result_summary = build_env_diagnostics(
+                    host=host,
+                    guest=guest,
+                    node=node,
+                    guest_type=guest_type,
+                    test_vmid=test_vmid,
+                    storage=storage,
+                    backups=backups,
+                    latest_volid=latest_volid,
+                    used_volid=archive,
+                    used_index=attempt_num,
+                    attempted=attempt_num,
+                    used_fallback=attempt_num > 1,
+                    restore_method=restore_method,
+                    source_hostdevs=source_hostdevs,
+                    ssh_ready=ssh_ready,
+                    failed_newer=failed_newer,
+                    manual_cmd=_manual_restore_cmd(archive),
+                    success=False,
+                )
+                _log(run, "—— Failure diagnostics ——\n" + run.result_summary)
+                db.commit()
+                raise
+
+        if not restored_ok:
+            err = last_backup_error or RuntimeError("No usable PBS backup could be restored")
+            summary = build_env_diagnostics(
+                host=host,
+                guest=guest,
+                node=node,
+                guest_type=guest_type,
+                test_vmid=test_vmid,
+                storage=storage,
+                backups=backups,
+                latest_volid=latest_volid,
+                used_volid=str(run.backup_volid or ""),
+                used_index=run.backup_used_index,
+                attempted=run.backups_attempted,
+                used_fallback=bool(run.used_fallback_backup),
+                restore_method=restore_method,
+                source_hostdevs=source_hostdevs,
+                ssh_ready=ssh_ready,
+                failed_newer=failed_newer,
+                manual_cmd=_manual_restore_cmd(str(run.backup_volid or latest_volid)),
+                success=False,
+            )
+            run.result_summary = summary
+            _log(run, "—— Failure diagnostics ——\n" + summary)
+            db.commit()
+            if is_pbs_data_error(err):
+                raise RuntimeError(
+                    f"PBS backup data error for VMID {guest.vmid} "
+                    f"(tried {run.backups_attempted} of {total_backups} available). "
+                    f"{err}. "
+                    "The snapshot(s) may be incomplete (missing chunk). "
+                    "Verify in PBS, take a fresh backup, then retry."
+                ) from err
+            raise err
+
+        # Success diagnostics (especially important when not using latest)
+        run.result_summary = build_env_diagnostics(
+            host=host,
+            guest=guest,
+            node=node,
+            guest_type=guest_type,
+            test_vmid=test_vmid,
+            storage=storage,
+            backups=backups,
+            latest_volid=latest_volid,
+            used_volid=str(run.backup_volid or ""),
+            used_index=used_idx,
+            attempted=run.backups_attempted,
+            used_fallback=bool(run.used_fallback_backup),
+            restore_method=restore_method,
+            source_hostdevs=source_hostdevs,
+            ssh_ready=ssh_ready,
+            failed_newer=failed_newer,
+            manual_cmd="",
+            success=True,
         )
-        _set_progress(db, run, pct=82.0, label="Restore finished — configuring")
-        _log(run, "Restore completed")
+        if run.used_fallback_backup:
+            _log(
+                run,
+                "—— IMPORTANT: older backup was used ——\n" + run.result_summary,
+            )
+        else:
+            _log(run, "—— Restore diagnostics ——\n" + run.result_summary)
         db.commit()
 
         # Detach NICs (and host USB/PCI) before start — test guests must stay isolated
         if guest_type == "qemu":
-            deleted = client.qemu_unlink_nets(node, test_vmid)
-            deleted += client.qemu_unlink_hostdevs(node, test_vmid)
+            deleted: list[str] = []
+            try:
+                deleted = client.qemu_unlink_nets(node, test_vmid)
+                deleted += client.qemu_unlink_hostdevs(node, test_vmid)
+            except ProxmoxAPIError as unlink_exc:
+                if ssh_ready:
+                    _log(run, f"API unlink failed ({unlink_exc}); trying SSH qm set --delete")
+                    cfg = client.qemu_config(node, test_vmid)
+                    keys = [k for k in cfg.keys() if str(k).startswith("net")] + qemu_hostdev_keys(
+                        cfg
+                    )
+                    with _open_ssh() as ssh:
+                        deleted = ssh.qm_delete_keys(int(test_vmid), keys)
+                else:
+                    raise
         else:
             deleted = client.lxc_unlink_nets(node, test_vmid)
         _set_progress(db, run, pct=86.0, label="Detached NICs — starting guest")
@@ -457,9 +970,12 @@ def execute_restore_run(db: Session, run_id: int) -> None:
             if guest_type == "qemu"
             else client.lxc_config(node, test_vmid)
         )
-        leftover = [k for k in cfg.keys() if str(k).startswith("net")]
-        if leftover:
-            raise RuntimeError(f"NIC detach incomplete; still present: {leftover}")
+        leftover_nets = [k for k in cfg.keys() if str(k).startswith("net")]
+        leftover_host = qemu_hostdev_keys(cfg) if guest_type == "qemu" else []
+        if leftover_nets or leftover_host:
+            raise RuntimeError(
+                f"Detach incomplete; still present: {leftover_nets + leftover_host}"
+            )
         db.commit()
 
         if guest_type == "qemu":
@@ -517,7 +1033,14 @@ def execute_restore_run(db: Session, run_id: int) -> None:
         _set_progress(db, run, pct=97.0, label="Cleaning up test guest")
         run.status = "success"
         guest.last_tested_at = datetime.now(timezone.utc)
-        _log(run, "Restore test SUCCESS")
+        if run.used_fallback_backup:
+            _log(
+                run,
+                f"Restore test SUCCESS — but used OLDER backup "
+                f"#{run.backup_used_index} of {run.backup_count} (not the latest)",
+            )
+        else:
+            _log(run, "Restore test SUCCESS")
         db.commit()
 
     except Exception as exc:  # noqa: BLE001
@@ -528,10 +1051,36 @@ def execute_restore_run(db: Session, run_id: int) -> None:
                 f"{msg} — API tokens cannot restore guests that pass through host USB/PCI devices. "
                 "Exclude this guest, or remove those host devices from the source before the next backup."
             )
+        elif is_pbs_data_error(exc) and "PBS backup data error" not in msg:
+            msg = (
+                f"{msg} — PBS snapshot data looks incomplete (missing chunk). "
+                "Verify this backup in PBS or take a fresh backup, then retry."
+            )
+        if run.backup_count:
+            msg = (
+                f"{msg}\n"
+                f"(PBS backups available for this guest: {run.backup_count}; "
+                f"attempted: {run.backups_attempted or 0})"
+            )
         run.status = "failed"
         run.error_message = msg
         _set_progress(db, run, label="Failed")
         _log(run, f"ERROR: {msg}")
+        if run.backup_volid and test_vmid and storage and node:
+            if (guest_type or "qemu") == "qemu":
+                fail_cmd = SSHSession.format_qmrestore_cmd(
+                    str(run.backup_volid), int(test_vmid), storage=storage, unique=True
+                )
+            else:
+                fail_cmd = SSHSession.format_pct_restore_cmd(
+                    str(run.backup_volid), int(test_vmid), storage=storage, unique=True
+                )
+            _log(
+                run,
+                f"Manual retry on Proxmox node {node} as root:\n  {fail_cmd}",
+            )
+        if run.result_summary:
+            _log(run, "See result_summary / diagnostics above for backup inventory and environment.")
         db.commit()
     finally:
         try:

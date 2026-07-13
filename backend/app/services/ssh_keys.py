@@ -1,14 +1,16 @@
 """
-Purpose: SSH helpers for QMP screendump and key generation.
+Purpose: SSH helpers for QMP screendump, qmrestore fallback, and key generation.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Version: 1.0.0
+Modified: 2026-07-12
+Version: 1.2.0
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import shlex
 from pathlib import Path
 
 import paramiko
@@ -113,6 +115,72 @@ class SSHSession:
         code, out, err = self.run(f"test -s '{remote_path}' && echo OK")
         if code != 0 or "OK" not in out:
             raise RuntimeError(f"screendump file missing or empty at {remote_path}: {err}")
+
+    @staticmethod
+    def format_qmrestore_cmd(
+        archive: str,
+        vmid: int,
+        storage: str | None = None,
+        unique: bool = True,
+    ) -> str:
+        """Shell command equivalent of an SSH qmrestore (for logs / manual retry)."""
+        cmd = f"qmrestore {shlex.quote(archive)} {int(vmid)}"
+        if storage:
+            cmd += f" --storage {shlex.quote(storage)}"
+        if unique:
+            cmd += " --unique 1"
+        return cmd
+
+    @staticmethod
+    def format_pct_restore_cmd(
+        archive: str,
+        vmid: int,
+        storage: str | None = None,
+        unique: bool = True,
+    ) -> str:
+        """Shell command equivalent of an LXC restore (for logs / manual retry)."""
+        cmd = f"pct restore {int(vmid)} {shlex.quote(archive)}"
+        if storage:
+            cmd += f" --storage {shlex.quote(storage)}"
+        if unique:
+            cmd += " --unique 1"
+        return cmd
+
+    def qmrestore(
+        self,
+        archive: str,
+        vmid: int,
+        storage: str | None = None,
+        unique: bool = True,
+        timeout: int = 7200,
+    ) -> str:
+        """
+        Restore a QEMU backup as root via SSH.
+        Needed when the archive/config includes host USB/PCI devices that API tokens
+        cannot apply ('only root can set usbN config for real devices').
+        """
+        cmd = self.format_qmrestore_cmd(archive, vmid, storage=storage, unique=unique)
+        code, out, err = self.run(cmd, timeout=timeout)
+        combined = (out or "") + (err or "")
+        if code != 0:
+            raise RuntimeError(
+                f"qmrestore via SSH failed (exit {code}). "
+                f"Command: {cmd}\n{combined[-2000:]}"
+            )
+        return combined.strip()
+
+    def qm_delete_keys(self, vmid: int, keys: list[str]) -> list[str]:
+        """Delete config keys from a QEMU guest (e.g. usb0, hostpci0, net0)."""
+        if not keys:
+            return []
+        delete_arg = ",".join(sorted(keys))
+        code, out, err = self.run(
+            f"qm set {int(vmid)} --delete {shlex.quote(delete_arg)}",
+            timeout=120,
+        )
+        if code != 0:
+            raise RuntimeError(f"qm set --delete failed: {err or out}")
+        return list(keys)
 
     def fetch_file(self, remote_path: str, local_path: str) -> None:
         assert self.client is not None

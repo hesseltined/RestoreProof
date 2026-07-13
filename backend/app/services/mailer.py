@@ -2,7 +2,8 @@
 Purpose: Outbound email via aiosmtplib using stored SMTP settings.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Version: 1.0.0
+Modified: 2026-07-12
+Version: 1.1.0
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.security import decrypt_secret
 from app.services.bootstrap import get_smtp_settings
+from app.services.email_templates import html_to_plain
 from app.services.smtp_presets import SMTP_PRESETS
 
 logger = logging.getLogger(__name__)
@@ -41,6 +43,7 @@ async def send_email(
     subject: str,
     body: str,
     cc_addrs: Optional[list[str]] = None,
+    inline_images: Optional[list[tuple[str, bytes, str]]] = None,
 ) -> None:
     smtp = get_smtp_settings(db)
     if not smtp.host or not smtp.from_email:
@@ -53,7 +56,17 @@ async def send_email(
     if cc_addrs:
         msg["Cc"] = ", ".join(cc_addrs)
     msg["Subject"] = subject
-    msg.set_content(body)
+
+    is_html = "<html" in body.lower()
+    if is_html:
+        msg.set_content(html_to_plain(body))
+        msg.add_alternative(body, subtype="html")
+        if inline_images:
+            html_part = msg.get_payload()[-1]
+            for cid, data, subtype in inline_images:
+                html_part.add_related(data, "image", subtype, cid=cid)
+    else:
+        msg.set_content(body)
 
     recipients = list(to_addrs) + list(cc_addrs or [])
 

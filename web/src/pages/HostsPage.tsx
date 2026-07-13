@@ -3,7 +3,7 @@
  * Author: Doug Hesseltine
  * Created: 2026-07-12
  * Modified: 2026-07-12
- * Version: 1.4.0
+ * Version: 1.5.0
  */
 
 import { FormEvent, useEffect, useState } from "react";
@@ -20,6 +20,10 @@ type LatestRun = {
   guest_type: string;
   evidence_kind: string;
   error_message: string | null;
+  result_summary?: string | null;
+  used_fallback_backup?: boolean;
+  backup_count?: number | null;
+  backup_used_index?: number | null;
   finished_at: string | null;
   started_at: string | null;
 };
@@ -89,10 +93,18 @@ function LatestEvidence({ run }: { run: LatestRun | null }) {
         <span className="badge fail">Failed</span>
         <div className="host-evidence-meta">
           <strong>{run.source_name}</strong>
-          <div className="help mono">VMID {run.source_vmid} · run #{run.id}</div>
+          <div className="help mono">
+            VMID {run.source_vmid} · run #{run.id}
+            {run.backup_count != null
+              ? ` · ${run.backup_count} backup${run.backup_count === 1 ? "" : "s"} available`
+              : ""}
+          </div>
           <p className="error host-evidence-error">
             {run.error_message || "Restore test failed"}
           </p>
+          {run.result_summary && (
+            <pre className="mono host-evidence-summary">{run.result_summary}</pre>
+          )}
           <Link className="btn secondary small" to={`/runs/${run.id}`}>
             View run
           </Link>
@@ -102,11 +114,23 @@ function LatestEvidence({ run }: { run: LatestRun | null }) {
   }
 
   return (
-    <div className="host-evidence ok">
-      <span className="badge ok">Success</span>
+    <div className={`host-evidence ${run.used_fallback_backup ? "warn" : "ok"}`}>
+      <span className={`badge ${run.used_fallback_backup ? "warn" : "ok"}`}>
+        {run.used_fallback_backup ? "Success (older backup)" : "Success"}
+      </span>
       <div className="host-evidence-meta">
         <strong>{run.source_name}</strong>
-        <div className="help mono">VMID {run.source_vmid} · run #{run.id}</div>
+        <div className="help mono">
+          VMID {run.source_vmid} · run #{run.id}
+          {run.backup_count != null
+            ? ` · used ${run.backup_used_index ?? "—"}/${run.backup_count}`
+            : ""}
+        </div>
+        {run.used_fallback_backup && (
+          <p className="warn-text">
+            Not the latest backup — newer snapshot(s) failed. See run for details.
+          </p>
+        )}
         {run.evidence_kind === "screenshot" && (
           <AuthenticatedImage
             path={`/runs/${run.id}/evidence`}

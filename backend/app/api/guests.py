@@ -2,7 +2,8 @@
 Purpose: Guest inventory, exclude/schedule overrides, run-now.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Version: 1.0.0
+Modified: 2026-07-12
+Version: 1.1.0
 """
 
 from __future__ import annotations
@@ -32,6 +33,9 @@ def _guest_out(guest: Guest, host_name: str = "") -> GuestOut:
         guest_type=guest.guest_type,
         node=guest.node,
         status=guest.status,
+        cpu_cores=guest.cpu_cores,
+        memory_bytes=guest.memory_bytes,
+        disk_bytes=guest.disk_bytes,
         excluded=guest.excluded,
         schedule_cron=guest.schedule_cron,
         schedule_enabled=guest.schedule_enabled,

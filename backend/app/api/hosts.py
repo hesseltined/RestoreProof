@@ -3,7 +3,7 @@ Purpose: Proxmox host connection management + SSH key exchange helpers.
 Author: Doug Hesseltine
 Created: 2026-07-12
 Modified: 2026-07-12
-Version: 1.2.0
+Version: 1.3.0
 """
 
 from __future__ import annotations
@@ -46,6 +46,10 @@ def _latest_run_for_host(db: Session, host_id: int) -> HostLatestRunOut | None:
         guest_type=run.guest_type,
         evidence_kind=run.evidence_kind or "none",
         error_message=run.error_message,
+        result_summary=run.result_summary or None,
+        used_fallback_backup=bool(run.used_fallback_backup),
+        backup_count=run.backup_count,
+        backup_used_index=run.backup_used_index,
         finished_at=run.finished_at,
         started_at=run.started_at,
     )

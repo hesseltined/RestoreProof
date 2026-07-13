@@ -3,7 +3,7 @@ Purpose: SQLAlchemy engine and session helpers.
 Author: Doug Hesseltine
 Created: 2026-07-12
 Modified: 2026-07-12
-Version: 1.3.0
+Version: 1.5.0
 """
 
 from collections.abc import Generator
@@ -42,6 +42,15 @@ def ensure_schema() -> None:
         "ALTER TABLE restore_runs ADD COLUMN IF NOT EXISTS progress_label VARCHAR(120)",
         "ALTER TABLE restore_runs ADD COLUMN IF NOT EXISTS proxmox_upid VARCHAR(255)",
         "ALTER TABLE restore_runs ADD COLUMN IF NOT EXISTS proxmox_node VARCHAR(120)",
+        "ALTER TABLE guests ADD COLUMN IF NOT EXISTS cpu_cores INTEGER",
+        "ALTER TABLE guests ADD COLUMN IF NOT EXISTS memory_bytes BIGINT",
+        "ALTER TABLE guests ADD COLUMN IF NOT EXISTS disk_bytes BIGINT",
+        "ALTER TABLE restore_runs ADD COLUMN IF NOT EXISTS backup_count INTEGER",
+        "ALTER TABLE restore_runs ADD COLUMN IF NOT EXISTS backup_used_index INTEGER",
+        "ALTER TABLE restore_runs ADD COLUMN IF NOT EXISTS latest_backup_volid VARCHAR(512) DEFAULT ''",
+        "ALTER TABLE restore_runs ADD COLUMN IF NOT EXISTS used_fallback_backup BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE restore_runs ADD COLUMN IF NOT EXISTS backups_attempted INTEGER DEFAULT 0",
+        "ALTER TABLE restore_runs ADD COLUMN IF NOT EXISTS result_summary TEXT DEFAULT ''",
     ]
     with engine.begin() as conn:
         for stmt in statements:

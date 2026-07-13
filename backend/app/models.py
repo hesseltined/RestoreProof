@@ -3,7 +3,7 @@ Purpose: SQLAlchemy ORM models for RestoreProof.
 Author: Doug Hesseltine
 Created: 2026-07-12
 Modified: 2026-07-12
-Version: 1.3.0
+Version: 1.5.0
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     Float,
@@ -72,28 +73,18 @@ class AppSettings(Base):
     notify_to: Mapped[str] = mapped_column(Text, default="")
     notify_cc: Mapped[str] = mapped_column(Text, default="")
     email_success_subject: Mapped[str] = mapped_column(
-        String(255), default="[RestoreProof] SUCCESS: {{guest_name}} ({{vmid}})"
+        String(255), default="✅ RestoreProof passed — {{guest_name}} (VMID {{vmid}})"
     )
     email_failure_subject: Mapped[str] = mapped_column(
-        String(255), default="[RestoreProof] FAILURE: {{guest_name}} ({{vmid}})"
+        String(255), default="❌ RestoreProof failed — {{guest_name}} (VMID {{vmid}})"
     )
     email_success_body: Mapped[str] = mapped_column(
         Text,
-        default=(
-            "Restore test succeeded for {{guest_name}} (VMID {{vmid}}).\n"
-            "Backup: {{backup_volid}}\nTest ID: {{test_vmid}}\n"
-            "Started: {{started_at}}\nFinished: {{finished_at}}\n"
-            "View: {{run_url}}\n"
-        ),
+        default="",
     )
     email_failure_body: Mapped[str] = mapped_column(
         Text,
-        default=(
-            "Restore test FAILED for {{guest_name}} (VMID {{vmid}}).\n"
-            "Error: {{error_message}}\n"
-            "Backup: {{backup_volid}}\n"
-            "View: {{run_url}}\n"
-        ),
+        default="",
     )
 
 
@@ -151,6 +142,10 @@ class Guest(Base):
     guest_type: Mapped[str] = mapped_column(String(16))  # qemu | lxc
     node: Mapped[str] = mapped_column(String(120), default="")
     status: Mapped[str] = mapped_column(String(64), default="")
+    # Specs from Proxmox cluster/resources (refreshed on host sync)
+    cpu_cores: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    memory_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)  # maxmem
+    disk_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)  # maxdisk
     excluded: Mapped[bool] = mapped_column(Boolean, default=False)
     schedule_cron: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     schedule_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -186,6 +181,13 @@ class RestoreRun(Base):
     guest_type: Mapped[str] = mapped_column(String(16), default="qemu")
     test_vmid: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     backup_volid: Mapped[str] = mapped_column(String(512), default="")
+    # Inventory / fallback metadata (set during restore)
+    backup_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    backup_used_index: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 1-based
+    latest_backup_volid: Mapped[str] = mapped_column(String(512), default="")
+    used_fallback_backup: Mapped[bool] = mapped_column(Boolean, default=False)
+    backups_attempted: Mapped[int] = mapped_column(Integer, default=0)
+    result_summary: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(32), default="queued")
     # queued | running | success | failed
     trigger: Mapped[str] = mapped_column(String(32), default="manual")  # manual | schedule

@@ -2,7 +2,8 @@
  * Purpose: Restore run history and evidence viewer.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Version: 1.0.0
+ * Modified: 2026-07-12
+ * Version: 1.1.0
  */
 
 import { useEffect, useState } from "react";
@@ -17,6 +18,12 @@ type Run = {
   test_vmid: number | null;
   guest_type: string;
   backup_volid: string;
+  backup_count?: number | null;
+  backup_used_index?: number | null;
+  latest_backup_volid?: string;
+  used_fallback_backup?: boolean;
+  backups_attempted?: number;
+  result_summary?: string;
   status: string;
   trigger: string;
   error_message: string | null;
@@ -27,6 +34,18 @@ type Run = {
   created_at: string;
   log_text?: string;
 };
+
+function statusBadgeClass(status: string, usedFallback?: boolean): string {
+  if (status === "failed") return "fail";
+  if (status === "success" && usedFallback) return "warn";
+  if (status === "success") return "ok";
+  return "run";
+}
+
+function statusLabel(status: string, usedFallback?: boolean): string {
+  if (status === "success" && usedFallback) return "success (older backup)";
+  return status;
+}
 
 export function RunsPage() {
   const [runs, setRuns] = useState<Run[]>([]);
@@ -51,6 +70,7 @@ export function RunsPage() {
               <th>Guest</th>
               <th>Test ID</th>
               <th>Status</th>
+              <th>Backup</th>
               <th>Trigger</th>
               <th>Created</th>
             </tr>
@@ -66,13 +86,19 @@ export function RunsPage() {
                 </td>
                 <td className="mono">{r.test_vmid ?? "—"}</td>
                 <td>
-                  <span
-                    className={`badge ${
-                      r.status === "success" ? "ok" : r.status === "failed" ? "fail" : "run"
-                    }`}
-                  >
-                    {r.status}
+                  <span className={`badge ${statusBadgeClass(r.status, r.used_fallback_backup)}`}>
+                    {statusLabel(r.status, r.used_fallback_backup)}
                   </span>
+                </td>
+                <td className="help">
+                  {r.backup_count != null ? (
+                    <>
+                      {r.backup_used_index ?? "—"}/{r.backup_count}
+                      {r.used_fallback_backup ? " · not latest" : ""}
+                    </>
+                  ) : (
+                    "—"
+                  )}
                 </td>
                 <td>{r.trigger}</td>
                 <td>{new Date(r.created_at).toLocaleString()}</td>
@@ -118,23 +144,54 @@ export function RunDetailPage() {
       </p>
       <h1 className="page-title">
         Run #{run.id}{" "}
-        <span
-          className={`badge ${
-            run.status === "success" ? "ok" : run.status === "failed" ? "fail" : "run"
-          }`}
-        >
-          {run.status}
+        <span className={`badge ${statusBadgeClass(run.status, run.used_fallback_backup)}`}>
+          {statusLabel(run.status, run.used_fallback_backup)}
         </span>
       </h1>
       <p className="page-sub">
         {run.source_name} ({run.source_vmid}) → test {run.test_vmid ?? "—"} · {run.guest_type}
+        {run.backup_count != null
+          ? ` · ${run.backup_count} PBS backup${run.backup_count === 1 ? "" : "s"} available`
+          : ""}
       </p>
       {msg && <p className="success">{msg}</p>}
       {error && <p className="error">{error}</p>}
+
+      {run.used_fallback_backup && run.status === "success" && (
+        <div className="card callout-warn">
+          <strong>Not the latest backup</strong>
+          <p style={{ marginBottom: 0 }}>
+            This run succeeded using backup{" "}
+            <span className="mono">
+              #{run.backup_used_index} of {run.backup_count}
+            </span>{" "}
+            because newer snapshot(s) failed. Latest was{" "}
+            <span className="mono">{run.latest_backup_volid || "unknown"}</span>.
+          </p>
+        </div>
+      )}
+
+      {run.result_summary && (
+        <div className={`card ${run.status === "failed" ? "callout-fail" : run.used_fallback_backup ? "callout-warn" : ""}`}>
+          <h3 style={{ marginTop: 0 }}>Diagnostics</h3>
+          <pre className="mono result-summary">{run.result_summary}</pre>
+        </div>
+      )}
+
       <div className="grid-2">
         <div className="card">
           <h3 style={{ marginTop: 0 }}>Details</h3>
           <p className="mono">{run.backup_volid || "No backup volid"}</p>
+          {run.backup_count != null && (
+            <p className="help">
+              Used backup {run.backup_used_index ?? "—"} of {run.backup_count} available
+              {run.used_fallback_backup ? " (fallback — not latest)" : " (latest)"}
+              {run.backups_attempted ? ` · attempted ${run.backups_attempted}` : ""}
+            </p>
+          )}
+          {run.latest_backup_volid && run.latest_backup_volid !== run.backup_volid && (
+            <p className="help mono">Latest available: {run.latest_backup_volid}</p>
+          )}
           {run.error_message && <p className="error">{run.error_message}</p>}
           <button className="btn secondary small" type="button" onClick={resend}>
             Resend email
@@ -161,4 +218,3 @@ export function RunDetailPage() {
     </div>
   );
 }
-

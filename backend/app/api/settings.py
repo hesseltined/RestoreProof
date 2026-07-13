@@ -35,6 +35,7 @@ from app.schemas import (
 from app.security import encrypt_secret, hash_password
 from app.services import locks
 from app.services.bootstrap import get_app_settings, get_smtp_settings
+from app.services.email_templates import apply_default_templates
 from app.services.mailer import apply_preset_defaults, send_email
 from app.services.scheduler import build_schedule_plan, pick_next_guest, refresh_guest_due_times
 from app.services.smtp_presets import list_presets
@@ -83,6 +84,16 @@ def update_settings(
         setattr(settings, key, value)
     db.commit()
     refresh_guest_due_times(db)
+    return settings
+
+
+@router.post("/settings/email-templates/reset", response_model=AppSettingsOut)
+def reset_email_templates(
+    db: Session = Depends(get_db), _: User = Depends(get_current_user)
+) -> AppSettingsOut:
+    settings = get_app_settings(db)
+    apply_default_templates(settings)
+    db.commit()
     return settings
 
 
@@ -288,6 +299,9 @@ def dashboard(db: Session = Depends(get_db), _: User = Depends(get_current_user)
             guest_type=next_guest.guest_type,
             node=next_guest.node,
             status=next_guest.status,
+            cpu_cores=next_guest.cpu_cores,
+            memory_bytes=next_guest.memory_bytes,
+            disk_bytes=next_guest.disk_bytes,
             excluded=next_guest.excluded,
             schedule_cron=next_guest.schedule_cron,
             schedule_enabled=next_guest.schedule_enabled,

@@ -13,7 +13,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, guests, hosts, runs, settings
+from app.api import auth, config_transfer, guests, hosts, runs, settings
 from app.config import get_settings
 from app.database import Base, SessionLocal, engine, ensure_schema
 from app.services.bootstrap import ensure_defaults
@@ -31,6 +31,7 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
+app.include_router(config_transfer.router, prefix="/api")
 app.include_router(hosts.router, prefix="/api")
 app.include_router(guests.router, prefix="/api")
 app.include_router(runs.router, prefix="/api")

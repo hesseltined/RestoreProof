@@ -3,7 +3,7 @@ Purpose: Pydantic request/response schemas.
 Author: Doug Hesseltine
 Created: 2026-07-12
 Modified: 2026-07-12
-Version: 1.3.0
+Version: 1.4.0
 """
 
 from __future__ import annotations
@@ -192,6 +192,10 @@ class HostLatestRunOut(BaseModel):
     guest_type: str
     evidence_kind: str
     error_message: Optional[str] = None
+    result_summary: Optional[str] = None
+    used_fallback_backup: bool = False
+    backup_count: Optional[int] = None
+    backup_used_index: Optional[int] = None
     finished_at: Optional[datetime] = None
     started_at: Optional[datetime] = None
 
@@ -230,6 +234,9 @@ class GuestOut(BaseModel):
     guest_type: str
     node: str
     status: str
+    cpu_cores: Optional[int] = None
+    memory_bytes: Optional[int] = None
+    disk_bytes: Optional[int] = None
     excluded: bool
     schedule_cron: Optional[str]
     schedule_enabled: bool
@@ -254,6 +261,12 @@ class RunOut(BaseModel):
     guest_type: str
     test_vmid: Optional[int]
     backup_volid: str
+    backup_count: Optional[int] = None
+    backup_used_index: Optional[int] = None
+    latest_backup_volid: str = ""
+    used_fallback_backup: bool = False
+    backups_attempted: int = 0
+    result_summary: str = ""
     status: str
     trigger: str
     progress_pct: Optional[float] = None

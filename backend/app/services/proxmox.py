@@ -3,7 +3,7 @@ Purpose: Proxmox VE REST API client (token auth).
 Author: Doug Hesseltine
 Created: 2026-07-12
 Modified: 2026-07-12
-Version: 1.2.0
+Version: 1.3.0
 """
 
 from __future__ import annotations
@@ -285,11 +285,7 @@ class ProxmoxClient:
     def qemu_unlink_hostdevs(self, node: str, vmid: int) -> list[str]:
         """Remove USB/PCI host passthrough devices from a test VM config."""
         cfg = self.qemu_config(node, vmid)
-        keys = [
-            k
-            for k in cfg.keys()
-            if str(k).startswith("usb") or str(k).startswith("hostpci")
-        ]
+        keys = qemu_hostdev_keys(cfg)
         if not keys:
             return []
         self.qemu_set_config(node, vmid, delete=",".join(sorted(keys)))
@@ -329,3 +325,20 @@ class ProxmoxClient:
         if resource_type:
             params["type"] = resource_type
         return self.request("GET", "/cluster/resources", params=params) or []
+
+
+def qemu_hostdev_keys(cfg: dict) -> list[str]:
+    """Config keys for host USB/PCI passthrough (usb0, hostpci0, …)."""
+    return [
+        str(k)
+        for k in cfg.keys()
+        if str(k).startswith("usb") or str(k).startswith("hostpci")
+    ]
+
+
+def is_hostdev_privilege_error(exc: BaseException) -> bool:
+    """True when Proxmox rejected USB/PCI config because the caller is not root."""
+    msg = str(exc).lower()
+    if "only root can set" not in msg:
+        return False
+    return "usb" in msg or "hostpci" in msg

@@ -3,7 +3,7 @@
  * Author: Doug Hesseltine
  * Created: 2026-07-12
  * Modified: 2026-07-12
- * Version: 1.3.0
+ * Version: 1.4.0
  */
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
@@ -113,6 +113,20 @@ export function NotificationsPage() {
     if (!settings) return;
     await api("/settings", { method: "PUT", body: JSON.stringify(settings) });
     setMsg("Notification preferences saved.");
+  }
+
+  async function resetTemplates() {
+    if (!settings) return;
+    setError("");
+    try {
+      const updated = await api<AppSettings>("/settings/email-templates/reset", {
+        method: "POST",
+      });
+      setSettings(updated);
+      setMsg("Applied colorful default email templates.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Reset failed");
+    }
   }
 
   async function sendTest() {
@@ -257,7 +271,13 @@ export function NotificationsPage() {
       </div>
 
       <form className="card" onSubmit={saveNotify}>
-        <h3 style={{ marginTop: 0 }}>When to notify</h3>
+        <h3 style={{ marginTop: 0 }}>Email templates</h3>
+        <p className="help" style={{ marginTop: 0 }}>
+          HTML templates with inline styles. Use <code>{"{{proof_section}}"}</code> to embed VM
+          console screenshots (QEMU) or container status proof (LXC). Proof is generated
+          automatically — you do not need different templates per guest type.
+        </p>
+        <h3 style={{ marginTop: "1.25rem" }}>When to notify</h3>
         <label>
           <input
             type="checkbox"
@@ -299,8 +319,9 @@ export function NotificationsPage() {
           />
         </div>
         <div className="field">
-          <label>Success body</label>
+          <label>Success body (HTML)</label>
           <textarea
+            rows={14}
             value={settings.email_success_body}
             onChange={(e) => setSettings({ ...settings, email_success_body: e.target.value })}
           />
@@ -315,19 +336,27 @@ export function NotificationsPage() {
           />
         </div>
         <div className="field">
-          <label>Failure body</label>
+          <label>Failure body (HTML)</label>
           <textarea
+            rows={14}
             value={settings.email_failure_body}
             onChange={(e) => setSettings({ ...settings, email_failure_body: e.target.value })}
           />
         </div>
         <p className="help">
-          Templates support: guest_name, vmid, test_vmid, backup_volid, error_message, started_at,
-          finished_at, run_url, status
+          Variables: guest_name, vmid, guest_type, guest_type_label, test_vmid, backup_volid,
+          backup_count, backup_used_index, latest_backup_volid, used_fallback_backup,
+          result_summary, error_message, started_at, finished_at, run_url, status, evidence_kind,
+          proof_section
         </p>
-        <button className="btn" type="submit">
-          Save notification settings
-        </button>
+        <div className="row-actions">
+          <button className="btn" type="submit">
+            Save notification settings
+          </button>
+          <button className="btn secondary" type="button" onClick={resetTemplates}>
+            Reset to colorful defaults
+          </button>
+        </div>
       </form>
     </div>
   );

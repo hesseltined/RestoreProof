@@ -2,13 +2,16 @@
  * Purpose: Login, setup, and password-reset screens.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Version: 1.0.0
+ * Modified: 2026-07-12
+ * Version: 1.1.1
  */
 
 import { FormEvent, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth";
+import { VersionFooter } from "../components/VersionFooter";
+import { APP_VERSION } from "../version";
 
 export function LoginPage() {
   const { login, setupRequired, completeSetup, toggleTheme, theme } = useAuth();
@@ -52,6 +55,9 @@ export function LoginPage() {
             <h1 style={{ margin: 0 }}>RestoreProof</h1>
             <p className="help" style={{ margin: 0 }}>
               {setupRequired ? "Create the first admin account" : "Sign in to continue"}
+            </p>
+            <p className="login-version" aria-label="Application version">
+              Version {APP_VERSION}
             </p>
           </div>
         </div>
@@ -103,6 +109,7 @@ export function LoginPage() {
             <Link to="/forgot-password">Forgot password?</Link>
           </p>
         )}
+        <VersionFooter variant="auth" />
       </div>
     </div>
   );
@@ -152,6 +159,7 @@ export function ForgotPasswordPage() {
             </Link>
           </div>
         </form>
+        <VersionFooter variant="auth" />
       </div>
     </div>
   );
@@ -197,6 +205,7 @@ export function ResetPasswordPage() {
             Update password
           </button>
         </form>
+        <VersionFooter variant="auth" />
       </div>
     </div>
   );

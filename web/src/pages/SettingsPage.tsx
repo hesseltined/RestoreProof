@@ -119,9 +119,12 @@ export function SettingsPage() {
           those.
         </p>
         <p className="help">
-          Encrypted secrets (API tokens, SMTP password) require the same{" "}
-          <code className="mono">SECRET_KEY</code> or <code className="mono">ENCRYPTION_KEY</code>{" "}
-          in <code className="mono">.env</code> on the target VM.
+          Encrypted secrets (API tokens, SMTP password) require the{" "}
+          <strong>same</strong> <code className="mono">SECRET_KEY</code> on the target
+          (Portainer: <code className="mono">API_SECRET_KEY</code> /{" "}
+          <code className="mono">WORKER_SECRET_KEY</code>, identical values). If you rotate the
+          key on a new server, re-enter every Proxmox token secret and SMTP password after
+          import — otherwise Test API fails with a decrypt error.
         </p>
 
         <div className="config-transfer-grid">

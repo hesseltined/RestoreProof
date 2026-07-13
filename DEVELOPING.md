@@ -2,7 +2,7 @@
 # Author: Doug Hesseltine
 # Created: 2026-07-12
 # Modified: 2026-07-12
-# Version: 1.1.0
+# Version: 1.2.0
 
 # Developing RestoreProof
 
@@ -25,25 +25,38 @@ origin  https://github.com/hesseltined/RestoreProof.git
 ./scripts/setup-remotes.sh   # optional interactive helper
 ```
 
-### Docker Hub (`hesseltined`)
+### Docker Hub (`hesseltined` account → images under `yesitsmedoug/…`)
 
 ```bash
 docker login -u hesseltined
 # Prefer an Access Token from hub.docker.com → Account Settings → Security
 ```
 
+Published image names use the Hub namespace **`yesitsmedoug`** (see `scripts/push-images.sh`).
+
+## Local secrets
+
+```bash
+cp .env.example .env
+# Prefer:
+#   POSTGRES_PASSWORD=$(openssl rand -hex 24)
+#   SECRET_KEY=$(openssl rand -hex 32)
+```
+
+API/worker refuse to start if `SECRET_KEY` is empty/placeholder or the DB password in `DATABASE_URL` contains unsafe characters (`#`, `@`, `:`, `/`, `?`, `%`, `&`, …). See [PORTAINER.md](PORTAINER.md).
+
 ## Publish images (safe for a running restore)
 
 `./scripts/push-images.sh` only **builds and pushes** Hub tags. It does **not** run `docker compose up`, so your local stack keeps running.
 
 ```bash
-VERSION=1.1.0 ./scripts/push-images.sh
+VERSION=1.2.0 ./scripts/push-images.sh
 ```
 
 | Image | Tags |
 |-------|------|
-| `yesitsmedoug/restoreproof-api` | `latest`, `1.1.0`, … (API + worker) |
-| `yesitsmedoug/restoreproof-web` | `latest`, `1.1.0`, … |
+| `yesitsmedoug/restoreproof-api` | `latest`, `1.2.0`, … (API + worker) |
+| `yesitsmedoug/restoreproof-web` | `latest`, `1.2.0`, … |
 
 Consumers use [`portainer-stack.yml`](portainer-stack.yml) / [PORTAINER.md](PORTAINER.md).
 
@@ -57,14 +70,15 @@ open http://localhost:3080
 docker compose logs -f api worker
 ```
 
-UI: **3080** · API health: **http://localhost:8000/api/health**
+UI: **3080** · API health: **http://localhost:8000/api/health** (includes `"version"`)
 
 ## Docs map
 
 | File | Audience |
 |------|----------|
 | [README.md](README.md) | Overview + quick links |
-| [PORTAINER.md](PORTAINER.md) | Portainer / Hub-image deploy |
+| [PORTAINER.md](PORTAINER.md) | Portainer / Hub-image deploy, secrets, migration, troubleshooting |
 | [INSTALL-LXC.md](INSTALL-LXC.md) | Nested Docker in Proxmox LXC |
 | [portainer-stack.yml](portainer-stack.yml) | Stack YAML for Portainer |
 | [docker-compose.yml](docker-compose.yml) | Source-build compose |
+| [.env.example](.env.example) | Local env template |

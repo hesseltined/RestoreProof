@@ -1,11 +1,12 @@
 # Purpose: Forum-oriented announcement draft for RestoreProof
 # Author: Doug Hesseltine
 # Created: 2026-07-12
-# Version: 1.0.0
+# Modified: 2026-07-12
+# Version: 1.1.0
 
 # RestoreProof — forum announcement draft
 
-**Title:** RestoreProof: automated PBS restore drills with console screenshots (Docker / LXC)
+**Title:** RestoreProof: automated PBS restore drills with console screenshots (Docker / Portainer / LXC)
 
 ---
 
@@ -20,13 +21,15 @@ I built a small open-source appliance called **RestoreProof** for people who wan
 - On a schedule (or Run now): restores the **latest PBS backup** to a throwaway VMID in a reserved pool (default 9000–9099), **detaches NICs**, boots, waits ~1 minute, captures evidence, destroys the test guest, and emails you
 - **Original VMs stay online** — this is not a destructive DR overwrite
 - LXC containers get a structured “running/uptime” proof (no VGA framebuffer)
-- Admin UI: guests list with excludes + per-VM schedule overrides, run history with screenshots, SMTP presets (M365, SMTP2GO, Zoho, etc.), TOTP 2FA
+- Admin UI: guests list with excludes + per-VM schedule overrides, run history with screenshots, SMTP presets (M365, SMTP2GO, Zoho, etc.), TOTP 2FA, config export/import
 
 ### Deploy
 
-Ubuntu LXC + Docker Compose (nesting required). Details in the repo README / INSTALL-LXC.md.
+- **Portainer / Docker Hub** (recommended): paste `portainer-stack.yml`, set hex-only env secrets — see PORTAINER.md
+- Or Ubuntu LXC + Docker Compose (nesting required) — INSTALL-LXC.md
 
 GitHub: https://github.com/hesseltined/RestoreProof  
+Images: `yesitsmedoug/restoreproof-api` / `yesitsmedoug/restoreproof-web`  
 License: Apache-2.0 (community edition)
 
 Feedback welcome — especially around PBS edge cases and screenshot reliability across GPU types.

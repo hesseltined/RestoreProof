@@ -3,7 +3,7 @@
  * Author: Doug Hesseltine
  * Created: 2026-07-12
  * Modified: 2026-07-12
- * Version: 1.1.0
+ * Version: 1.1.1
  */
 
 import { Navigate, Route, Routes } from "react-router-dom";

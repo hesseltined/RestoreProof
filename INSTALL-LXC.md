@@ -3,11 +3,22 @@
 **Author:** Doug Hesseltine  
 **Created:** 2026-07-12  
 **Modified:** 2026-07-12  
-**Version:** 1.1.0
+**Version:** 1.2.0
 
 This guide deploys RestoreProof with Docker inside an Ubuntu LXC container on Proxmox VE.
 
 Prefer **Portainer on a Docker host** instead? Use [PORTAINER.md](PORTAINER.md) and [`portainer-stack.yml`](portainer-stack.yml) (pulls Docker Hub images — no build).
+
+## Secrets (read this first)
+
+Generate **hex-only** values — never paste passwords containing `# @ : / ? % &` into YAML or env files:
+
+```bash
+openssl rand -hex 24   # POSTGRES_PASSWORD
+openssl rand -hex 32   # SECRET_KEY (Portainer: API_SECRET_KEY = WORKER_SECRET_KEY)
+```
+
+See [PORTAINER.md](PORTAINER.md) for migration rules (same `SECRET_KEY` when importing config).
 
 ## 1. Create the LXC
 
@@ -47,8 +58,16 @@ systemctl enable --now docker
 git clone https://github.com/hesseltined/RestoreProof.git
 cd RestoreProof
 cp .env.example .env
-nano .env   # set SECRET_KEY, POSTGRES_PASSWORD, APP_BASE_URL, CORS_ORIGINS
+# Set SECRET_KEY=$(openssl rand -hex 32) and POSTGRES_PASSWORD=$(openssl rand -hex 24)
+nano .env
 docker compose -f portainer-stack.yml --env-file .env up -d
+```
+
+When using `portainer-stack.yml` with a `.env` file, also set:
+
+```bash
+API_SECRET_KEY=<same as SECRET_KEY>
+WORKER_SECRET_KEY=<same as SECRET_KEY>
 ```
 
 ### Option B — Build from source
@@ -57,10 +76,10 @@ docker compose -f portainer-stack.yml --env-file .env up -d
 git clone https://github.com/hesseltined/RestoreProof.git
 cd RestoreProof
 cp .env.example .env
-nano .env   # set SECRET_KEY, POSTGRES_PASSWORD, APP_BASE_URL
+# Set SECRET_KEY and POSTGRES_PASSWORD to openssl rand -hex values
+nano .env   # also APP_BASE_URL
 docker compose up -d --build
 ```
-
 Set `APP_BASE_URL` (and `CORS_ORIGINS`) to the URL you will use in the browser (e.g. `http://10.250.0.50:3080`) so password-reset links and CORS work.
 
 ## 4. Proxmox API token

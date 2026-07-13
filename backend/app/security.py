@@ -2,7 +2,8 @@
 Purpose: Password hashing, JWT, Fernet secret encryption, TOTP helpers.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Version: 1.0.0
+Modified: 2026-07-12
+Version: 1.0.1
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import pyotp
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
@@ -75,7 +76,14 @@ def encrypt_secret(value: str) -> str:
 def decrypt_secret(value: str) -> str:
     if not value:
         return ""
-    return _fernet().decrypt(value.encode("utf-8")).decode("utf-8")
+    try:
+        return _fernet().decrypt(value.encode("utf-8")).decode("utf-8")
+    except InvalidToken as exc:
+        raise ValueError(
+            "Stored secret cannot be decrypted with the current SECRET_KEY. "
+            "Re-enter the Proxmox API token secret (and SMTP password if set), "
+            "or restore the original SECRET_KEY used when this config was saved."
+        ) from exc
 
 
 def generate_reset_token() -> tuple[str, str]:

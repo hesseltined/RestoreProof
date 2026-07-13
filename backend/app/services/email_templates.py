@@ -3,19 +3,22 @@ Purpose: Default notification templates and proof sections for restore emails.
 Author: Doug Hesseltine
 Created: 2026-07-12
 Modified: 2026-07-12
-Version: 1.0.0
+Version: 1.1.0
 """
 
 from __future__ import annotations
 
 import html
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from app.models import RestoreRun
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_SUCCESS_SUBJECT = "✅ RestoreProof passed — {{guest_name}} (VMID {{vmid}})"
 DEFAULT_FAILURE_SUBJECT = "❌ RestoreProof failed — {{guest_name}} (VMID {{vmid}})"
@@ -146,16 +149,29 @@ def build_proof_section(run: RestoreRun) -> str:
         )
 
     if run.evidence_kind == "screenshot":
+        path = Path(run.evidence_path) if run.evidence_path else None
+        if path and path.exists() and path.suffix.lower() == ".png" and path.stat().st_size > 0:
+            # Verify PNG magic so we never CID-attach a mislabeled PPM
+            magic = path.read_bytes()[:8]
+            if magic.startswith(b"\x89PNG\r\n\x1a\n"):
+                return (
+                    '<div style="margin:20px 0;padding:18px;background:#ecfdf5;border-radius:12px;'
+                    'border:1px solid #86efac;">'
+                    '<div style="font-size:13px;font-weight:700;color:#047857;margin-bottom:10px;'
+                    'letter-spacing:0.04em;text-transform:uppercase;">🖥️ VM console proof</div>'
+                    '<p style="margin:0 0 12px;font-size:14px;color:#166534;">'
+                    "Console screenshot from the restored test VM (attached inline below)."
+                    "</p>"
+                    '<img src="cid:restoreproof-screenshot" alt="VM console screenshot" '
+                    'style="max-width:100%;height:auto;border-radius:8px;border:1px solid #d1d5db;display:block;" />'
+                    "</div>"
+                )
         return (
-            '<div style="margin:20px 0;padding:18px;background:#ecfdf5;border-radius:12px;'
-            'border:1px solid #86efac;">'
-            '<div style="font-size:13px;font-weight:700;color:#047857;margin-bottom:10px;'
-            'letter-spacing:0.04em;text-transform:uppercase;">🖥️ VM console proof</div>'
-            '<p style="margin:0 0 12px;font-size:14px;color:#166534;">'
-            "Console screenshot from the restored test VM (attached inline below)."
-            "</p>"
-            '<img src="cid:restoreproof-screenshot" alt="VM console screenshot" '
-            'style="max-width:100%;height:auto;border-radius:8px;border:1px solid #d1d5db;display:block;" />'
+            '<div style="margin:18px 0;padding:14px 16px;background:#fff7ed;border-radius:10px;'
+            'border:1px solid #fed7aa;font-size:14px;color:#9a3412;">'
+            "<strong>Screenshot missing or invalid</strong> — restore succeeded, but the console "
+            "image could not be inlined (file missing or not a PNG). Re-run after upgrading "
+            "RestoreProof if this persists."
             "</div>"
         )
 
@@ -206,7 +222,12 @@ def screenshot_attachment(run: RestoreRun) -> Optional[tuple[str, bytes, str]]:
     path = Path(run.evidence_path)
     if not path.exists() or path.suffix.lower() != ".png":
         return None
-    return INLINE_SCREENSHOT_CID, path.read_bytes(), "png"
+    data = path.read_bytes()
+    # Refuse mislabeled PPM dumps (QEMU without libpng)
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        logger.warning("Skipping non-PNG evidence for run %s: %s", run.id, path)
+        return None
+    return INLINE_SCREENSHOT_CID, data, "png"
 
 
 def build_notification_context(run: RestoreRun, app_url: str) -> dict[str, Any]:

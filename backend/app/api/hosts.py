@@ -3,7 +3,7 @@ Purpose: Proxmox host connection management + SSH key exchange helpers.
 Author: Doug Hesseltine
 Created: 2026-07-12
 Modified: 2026-07-12
-Version: 1.3.0
+Version: 1.3.1
 """
 
 from __future__ import annotations
@@ -212,6 +212,11 @@ def test_api(
                 for s in storages
             ],
         }
+    except ValueError as exc:
+        host.last_error = str(exc)
+        host.api_ok_at = None
+        db.commit()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProxmoxAPIError as exc:
         host.last_error = str(exc)
         host.api_ok_at = None

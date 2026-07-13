@@ -3,7 +3,7 @@ Purpose: SSH helpers for QMP screendump, qmrestore fallback, and key generation.
 Author: Doug Hesseltine
 Created: 2026-07-12
 Modified: 2026-07-12
-Version: 1.2.0
+Version: 1.3.0
 """
 
 from __future__ import annotations
@@ -16,10 +16,33 @@ from pathlib import Path
 import paramiko
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
+from PIL import Image
 
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+def convert_screendump_to_png(src_path: str | Path, dest_path: str | Path) -> Path:
+    """
+    Normalize a QEMU screendump to PNG.
+
+    PVE QEMU is often built without libpng, so `screendump … -f png` fails and the
+    default dump is PPM (Netpbm) even when the remote filename ends in .png.
+    Browsers and email clients cannot display that as an image.
+    """
+    src = Path(src_path)
+    dest = Path(dest_path)
+    if not src.exists() or src.stat().st_size == 0:
+        raise RuntimeError(f"Screendump missing or empty: {src}")
+    with Image.open(src) as img:
+        # PPM dumps are RGB; force a portable PNG for UI + email CID
+        rgb = img.convert("RGB")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        rgb.save(dest, format="PNG", optimize=True)
+    if not dest.exists() or dest.stat().st_size == 0:
+        raise RuntimeError(f"PNG conversion produced empty file: {dest}")
+    return dest
 
 
 def host_key_paths(host_id: int) -> tuple[Path, Path]:
@@ -101,8 +124,12 @@ class SSHSession:
         return exit_code, out, err
 
     def screendump_vm(self, vmid: int, remote_path: str) -> None:
-        """Capture VGA framebuffer via QEMU monitor screendump."""
-        # Ensure directory exists
+        """
+        Capture VGA framebuffer via QEMU monitor screendump.
+
+        Prefer a .ppm remote path: Proxmox QEMU often lacks libpng, so `-f png`
+        errors with "Enable PNG support with libpng for screendump".
+        """
         remote_dir = os.path.dirname(remote_path)
         code, _, err = self.run(f"mkdir -p '{remote_dir}'")
         if code != 0:
@@ -112,6 +139,9 @@ class SSHSession:
         code, out, err = self.run(cmd, timeout=60)
         if code != 0:
             raise RuntimeError(f"screendump failed: {err or out}")
+        combined = f"{out or ''}{err or ''}"
+        if "Enable PNG support" in combined or "Error:" in combined:
+            raise RuntimeError(f"screendump failed: {combined.strip() or err or out}")
         code, out, err = self.run(f"test -s '{remote_path}' && echo OK")
         if code != 0 or "OK" not in out:
             raise RuntimeError(f"screendump file missing or empty at {remote_path}: {err}")

@@ -1,68 +1,71 @@
-# RestoreProof — Portainer / Docker Compose stack (pre-built images)
+# RestoreProof — Portainer stack
 # Author: Doug Hesseltine
 # Created: 2026-07-12
 # Modified: 2026-07-12
-# Version: 1.1.0
+# Version: 1.6.0
 #
-# Deploy in Portainer: Stacks → Add stack → Web editor → paste this file.
-# Set stack environment variables (or use .env) before deploy:
-#   POSTGRES_PASSWORD, SECRET_KEY, APP_BASE_URL, CORS_ORIGINS, WEB_PORT
+# REQUIRED Portainer environment variables (set in the UI — do not paste secrets into YAML):
+#   POSTGRES_PASSWORD   — openssl rand -hex 24   (alphanumeric ONLY; no # @ : / ? % &)
+#   API_SECRET_KEY      — openssl rand -hex 32   (32+ chars; Fernet + JWT)
+#   WORKER_SECRET_KEY   — MUST be identical to API_SECRET_KEY
 #
-# Images (Docker Hub):
-#   yesitsmedoug/restoreproof-api  — API + worker
-#   yesitsmedoug/restoreproof-web  — UI (nginx proxies /api → api:8000)
+# Why hex-only?
+#   - '#' in YAML starts a comment → truncated password → API crash-loop
+#   - '#' in DATABASE_URL starts a URL fragment → wrong password sent to Postgres
+#   - Changing POSTGRES_PASSWORD after first boot does NOT update an existing volume
 #
-# Docs: https://github.com/hesseltined/RestoreProof
+# Config import / migration:
+#   Copy the SAME API_SECRET_KEY (and ENCRYPTION_KEY if set) from the source install,
+#   or re-enter every Proxmox token secret and SMTP password after import.
+#
+# Optional under api + worker:
+#   APP_BASE_URL: https://restoreproof.example.com
 
 services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-restoreproof}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
-      POSTGRES_DB: ${POSTGRES_DB:-restoreproof}
+      POSTGRES_USER: restoreproof
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD via Portainer env}
+      POSTGRES_DB: restoreproof
     volumes:
       - rp_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-restoreproof}"]
+      test: ["CMD-SHELL", "pg_isready -U restoreproof -d restoreproof"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 12
     restart: unless-stopped
 
   api:
-    image: yesitsmedoug/restoreproof-api:${RESTOREPROOF_TAG:-latest}
+    image: yesitsmedoug/restoreproof-api:latest
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-restoreproof}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-restoreproof}
-      SECRET_KEY: ${SECRET_KEY:-change-me-to-a-long-random-string-at-least-32-chars}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
-      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3080}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3080}
+      # Password must be URL-safe (hex). See header comments.
+      DATABASE_URL: postgresql+psycopg://restoreproof:${POSTGRES_PASSWORD}@db:5432/restoreproof
+      SECRET_KEY: ${API_SECRET_KEY:?set API_SECRET_KEY via Portainer env}
       DATA_DIR: /data
-      DEFAULT_BOOT_WAIT_SECONDS: ${DEFAULT_BOOT_WAIT_SECONDS:-60}
     volumes:
       - rp_data:/data
       - rp_ssh:/root/.ssh
-    # Optional: expose API directly (usually leave closed; UI proxies /api)
-    # ports:
-    #   - "${API_PORT:-8000}:8000"
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 25s
     restart: unless-stopped
 
   worker:
-    image: yesitsmedoug/restoreproof-api:${RESTOREPROOF_TAG:-latest}
+    image: yesitsmedoug/restoreproof-api:latest
     command: python -m app.worker
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-restoreproof}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-restoreproof}
-      SECRET_KEY: ${SECRET_KEY}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
-      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3080}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3080}
+      DATABASE_URL: postgresql+psycopg://restoreproof:${POSTGRES_PASSWORD}@db:5432/restoreproof
+      SECRET_KEY: ${WORKER_SECRET_KEY:?set WORKER_SECRET_KEY via Portainer env}
       DATA_DIR: /data
-      DEFAULT_BOOT_WAIT_SECONDS: ${DEFAULT_BOOT_WAIT_SECONDS:-60}
     volumes:
       - rp_data:/data
       - rp_ssh:/root/.ssh
@@ -70,15 +73,16 @@ services:
       db:
         condition: service_healthy
       api:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
 
   web:
-    image: yesitsmedoug/restoreproof-web:${RESTOREPROOF_TAG:-latest}
+    image: yesitsmedoug/restoreproof-web:latest
     ports:
-      - "${WEB_PORT:-3080}:80"
+      - "3080:80"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

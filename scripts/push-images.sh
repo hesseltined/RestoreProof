@@ -3,7 +3,7 @@
 # Author: Doug Hesseltine
 # Created: 2026-07-12
 # Modified: 2026-07-12
-# Version: 1.1.0
+# Version: 1.2.0
 #
 # Builds and pushes only — does NOT run docker compose up / restart local containers.
 
@@ -12,7 +12,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="${VERSION:-1.1.0}"
+VERSION="${VERSION:-1.2.0}"
 REGISTRY_USER="${DOCKERHUB_USER:-yesitsmedoug}"
 IMAGE_API="${REGISTRY_USER}/restoreproof-api"
 IMAGE_WEB="${REGISTRY_USER}/restoreproof-web"

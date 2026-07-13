@@ -3,7 +3,7 @@ Purpose: Full restore → boot → evidence → cleanup cycle for one guest.
 Author: Doug Hesseltine
 Created: 2026-07-12
 Modified: 2026-07-12
-Version: 1.7.0
+Version: 1.8.0
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from app.services.proxmox import (
     is_hostdev_privilege_error,
     qemu_hostdev_keys,
 )
-from app.services.ssh_keys import SSHSession
+from app.services.ssh_keys import SSHSession, convert_screendump_to_png
 
 logger = logging.getLogger(__name__)
 
@@ -1002,16 +1002,20 @@ def execute_restore_run(db: Session, run_id: int) -> None:
         if guest_type == "qemu":
             if not host.ssh_host or not host.ssh_private_key_path:
                 raise RuntimeError("SSH host/key required for VM console screenshots")
-            remote = f"/tmp/restoreproof-{test_vmid}.png"
+            # PVE QEMU often lacks libpng — dump PPM, convert to PNG in-app for UI/email
+            remote = f"/tmp/restoreproof-{test_vmid}.ppm"
+            local_raw = evidence_dir / f"run_{run.id}.ppm"
             local = evidence_dir / f"run_{run.id}.png"
             with SSHSession(
                 host.ssh_host, host.ssh_port, host.ssh_user, host.ssh_private_key_path
             ) as ssh:
                 ssh.screendump_vm(test_vmid, remote)
-                ssh.fetch_file(remote, str(local))
+                ssh.fetch_file(remote, str(local_raw))
+            convert_screendump_to_png(local_raw, local)
+            local_raw.unlink(missing_ok=True)
             run.evidence_path = str(local)
             run.evidence_kind = "screenshot"
-            _log(run, f"Screenshot saved to {local}")
+            _log(run, f"Screenshot saved to {local} (converted from QEMU PPM screendump)")
         else:
             status = client.lxc_status(node, test_vmid)
             proof = {

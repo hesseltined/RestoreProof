@@ -3,7 +3,7 @@ Purpose: Background worker — process queued restores, schedule rotation, reten
 Author: Doug Hesseltine
 Created: 2026-07-12
 Modified: 2026-07-12
-Version: 1.3.0
+Version: 1.4.0
 """
 
 from __future__ import annotations
@@ -12,12 +12,14 @@ import logging
 import time
 from datetime import datetime, timezone
 
+from app.config import get_settings
 from app.database import Base, SessionLocal, engine, ensure_schema
 from app.models import RestoreRun
 from app.services.bootstrap import ensure_defaults, get_app_settings
 from app.services.restore import execute_restore_run, recover_orphaned_runs
 from app.services.retention import apply_retention
 from app.services.scheduler import pick_next_guest, refresh_guest_due_times
+from app.services.secrets_guard import validate_runtime_secrets
 
 logging.basicConfig(
     level=logging.INFO,
@@ -99,6 +101,7 @@ def maybe_enqueue_scheduled() -> None:
 
 
 def main() -> None:
+    validate_runtime_secrets(get_settings(), role="worker")
     Base.metadata.create_all(bind=engine)
     ensure_schema()
     db = SessionLocal()

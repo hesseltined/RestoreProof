@@ -3,12 +3,13 @@
  * Author: Doug Hesseltine
  * Created: 2026-07-12
  * Modified: 2026-07-12
- * Version: 1.1.0
+ * Version: 1.1.1
  */
 
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "./auth";
+import { VersionFooter } from "./components/VersionFooter";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: "◉" },
@@ -68,6 +69,7 @@ export function Layout() {
           >
             <span>Sign out</span>
           </button>
+          {!collapsed && <VersionFooter variant="app" />}
         </div>
       </aside>
       <div className="main">
@@ -89,6 +91,9 @@ export function Layout() {
         <main className="content">
           <Outlet />
         </main>
+        <footer className="app-page-footer">
+          <VersionFooter variant="app" />
+        </footer>
       </div>
     </div>
   );

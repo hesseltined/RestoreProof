@@ -4,7 +4,8 @@ RestoreProof application settings.
 Purpose: Load environment configuration for API and worker.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Version: 1.0.0
+Modified: 2026-07-12
+Version: 1.1.0
 """
 
 from functools import lru_cache
@@ -21,7 +22,7 @@ class Settings(BaseSettings):
     secret_key: str = "dev-secret-change-me-to-a-long-random-string"
     encryption_key: str = ""
     app_base_url: str = "http://localhost:3080"
-    cors_origins: str = "http://localhost:3080,http://127.0.0.1:3080"
+    cors_origins: str = "*"
     data_dir: str = "/data"
     default_boot_wait_seconds: int = 60
     access_token_expire_minutes: int = 60 * 12

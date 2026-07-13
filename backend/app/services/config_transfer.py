@@ -3,7 +3,7 @@ Purpose: Export and import RestoreProof configuration for VM rebuild or migratio
 Author: Doug Hesseltine
 Created: 2026-07-12
 Modified: 2026-07-12
-Version: 1.0.0
+Version: 1.0.1
 """
 
 from __future__ import annotations
@@ -246,17 +246,33 @@ def import_config_bundle(
         host = hosts_by_name.get(name)
         created = False
         if not host:
-            host = ProxmoxHost(name=name)
+            # api_url is NOT NULL — set required columns before first flush.
+            host = ProxmoxHost(
+                name=name,
+                api_url=str(host_data.get("api_url") or ""),
+                token_id=str(host_data.get("token_id") or ""),
+                token_secret_enc=str(host_data.get("token_secret_enc") or ""),
+                verify_ssl=bool(host_data.get("verify_ssl", False)),
+                ssh_host=str(host_data.get("ssh_host") or ""),
+                ssh_port=int(host_data.get("ssh_port") or 22),
+                ssh_user=str(host_data.get("ssh_user") or "root"),
+                preferred_restore_storage=str(
+                    host_data.get("preferred_restore_storage") or ""
+                ),
+                test_vmid_start=int(host_data.get("test_vmid_start") or 9000),
+                test_vmid_end=int(host_data.get("test_vmid_end") or 9099),
+                enabled=bool(host_data.get("enabled", True)),
+            )
             db.add(host)
             db.flush()
             hosts_by_name[name] = host
             created = True
-
-        for field in HOST_FIELDS:
-            if field == "name":
-                continue
-            if field in host_data:
-                setattr(host, field, host_data[field])
+        else:
+            for field in HOST_FIELDS:
+                if field == "name":
+                    continue
+                if field in host_data:
+                    setattr(host, field, host_data[field])
 
         host.ssh_private_key_path = _write_ssh_key_bundle(host.id, ssh_keys.get(name))
         host.last_sync_at = None

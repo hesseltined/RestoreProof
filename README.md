@@ -2,7 +2,7 @@
 # Author: Doug Hesseltine
 # Created: 2026-07-12
 # Modified: 2026-07-12
-# Version: 1.1.0
+# Version: 1.2.0
 
 # RestoreProof
 
@@ -27,17 +27,20 @@ RestoreProof runs non-destructive restore drills against [Proxmox Backup Server]
 
 ### Portainer (quick)
 
-1. Stacks → Add stack → paste [`portainer-stack.yml`](portainer-stack.yml)
-2. Set env: `POSTGRES_PASSWORD`, `SECRET_KEY`, `APP_BASE_URL`, `CORS_ORIGINS`, `WEB_PORT`
-3. Deploy → open `http://<host>:3080`
+1. Generate **hex-only** secrets (see [PORTAINER.md](PORTAINER.md) — do not use base64 or `#` in passwords)
+2. Stacks → Add stack → paste [`portainer-stack.yml`](portainer-stack.yml)
+3. Set env: `POSTGRES_PASSWORD`, `API_SECRET_KEY`, `WORKER_SECRET_KEY` (API and worker secrets **must match**)
+4. Deploy → open `http://<host>:3080`
 
 Images: [`yesitsmedoug/restoreproof-api`](https://hub.docker.com/r/yesitsmedoug/restoreproof-api) · [`yesitsmedoug/restoreproof-web`](https://hub.docker.com/r/yesitsmedoug/restoreproof-web)
+
+Login / page footers show **UI version · API version** (or **API unreachable** if the API container is down).
 
 ### Compose (build from source)
 
 ```bash
 cp .env.example .env
-# edit SECRET_KEY and POSTGRES_PASSWORD
+# set SECRET_KEY and POSTGRES_PASSWORD to openssl rand -hex … values
 docker compose up -d --build
 ```
 
@@ -66,8 +69,10 @@ Open **http://localhost:3080** — create the first admin, then add a host and r
 - Per-guest overrides + exclude + Run now → Dashboard progress
 - Hosts page shows latest restore evidence (or clear failure)
 - SMTP presets (M365, SMTP2GO, Zoho, Gmail, SendGrid, Mailgun, SES)
+- Config export/import for rebuilds (requires same `SECRET_KEY` / `API_SECRET_KEY`)
 - Local admins, password reset, TOTP 2FA
 - Light/dark UI, collapsible sidebar
+- Version string on login and page footers
 
 ## GitHub + Docker Hub
 
@@ -78,7 +83,7 @@ Maintainer publish (does **not** restart a running local compose stack):
 
 ```bash
 ./scripts/push-images.sh
-# optional: VERSION=1.1.0 ./scripts/push-images.sh
+# optional: VERSION=1.2.0 ./scripts/push-images.sh
 ```
 
 Full notes: [DEVELOPING.md](DEVELOPING.md)
@@ -87,9 +92,10 @@ Full notes: [DEVELOPING.md](DEVELOPING.md)
 
 - Use a dedicated Proxmox API token with restore/start/stop/delete rights on test VMIDs
 - Install the RestoreProof SSH public key only on nodes that need screenshots
-- Change `SECRET_KEY` and DB password before any network exposure
+- Use **hex** `SECRET_KEY` / `POSTGRES_PASSWORD` (see [PORTAINER.md](PORTAINER.md)); never leave `SECRET_KEY` empty
 - Prefer a dedicated restore storage pool when possible
 - Do not restart the worker while a restore is in progress
+- After rotating `SECRET_KEY`, re-enter all Proxmox token secrets and SMTP passwords (or restore the old key)
 
 ## License
 

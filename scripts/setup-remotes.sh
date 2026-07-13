@@ -59,4 +59,4 @@ docker login -u hesseltined
 echo ""
 echo "Setup complete."
 echo "  git push -u origin main   # after your first commit"
-echo "  ./scripts/push-images.sh # build & push hesseltined/restoreproof tags"
+echo "  ./scripts/push-images.sh # build & push yesitsmedoug/restoreproof tags"

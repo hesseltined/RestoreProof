@@ -42,8 +42,8 @@ VERSION=1.1.0 ./scripts/push-images.sh
 
 | Image | Tags |
 |-------|------|
-| `hesseltined/restoreproof-api` | `latest`, `1.1.0`, … (API + worker) |
-| `hesseltined/restoreproof-web` | `latest`, `1.1.0`, … |
+| `yesitsmedoug/restoreproof-api` | `latest`, `1.1.0`, … (API + worker) |
+| `yesitsmedoug/restoreproof-web` | `latest`, `1.1.0`, … |
 
 Consumers use [`portainer-stack.yml`](portainer-stack.yml) / [PORTAINER.md](PORTAINER.md).
 

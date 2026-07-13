@@ -10,8 +10,8 @@ Use the pre-built images from Docker Hub — no local build required.
 
 | Image | Purpose |
 |-------|---------|
-| [`hesseltined/restoreproof-api`](https://hub.docker.com/r/hesseltined/restoreproof-api) | FastAPI + worker |
-| [`hesseltined/restoreproof-web`](https://hub.docker.com/r/hesseltined/restoreproof-web) | React UI (nginx) |
+| [`yesitsmedoug/restoreproof-api`](https://hub.docker.com/r/yesitsmedoug/restoreproof-api) | FastAPI + worker |
+| [`yesitsmedoug/restoreproof-web`](https://hub.docker.com/r/yesitsmedoug/restoreproof-web) | React UI (nginx) |
 | `postgres:16-alpine` | Database |
 
 Stack file in this repo: [`portainer-stack.yml`](portainer-stack.yml)

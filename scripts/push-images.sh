@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Purpose: Build and push RestoreProof images to Docker Hub (hesseltined)
+# Purpose: Build and push RestoreProof images to Docker Hub (yesitsmedoug)
 # Author: Doug Hesseltine
 # Created: 2026-07-12
 # Modified: 2026-07-12
@@ -13,7 +13,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 VERSION="${VERSION:-1.1.0}"
-REGISTRY_USER="${DOCKERHUB_USER:-hesseltined}"
+REGISTRY_USER="${DOCKERHUB_USER:-yesitsmedoug}"
 IMAGE_API="${REGISTRY_USER}/restoreproof-api"
 IMAGE_WEB="${REGISTRY_USER}/restoreproof-web"
 

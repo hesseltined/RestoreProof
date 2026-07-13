@@ -31,7 +31,7 @@ RestoreProof runs non-destructive restore drills against [Proxmox Backup Server]
 2. Set env: `POSTGRES_PASSWORD`, `SECRET_KEY`, `APP_BASE_URL`, `CORS_ORIGINS`, `WEB_PORT`
 3. Deploy → open `http://<host>:3080`
 
-Images: [`hesseltined/restoreproof-api`](https://hub.docker.com/r/hesseltined/restoreproof-api) · [`hesseltined/restoreproof-web`](https://hub.docker.com/r/hesseltined/restoreproof-web)
+Images: [`yesitsmedoug/restoreproof-api`](https://hub.docker.com/r/yesitsmedoug/restoreproof-api) · [`yesitsmedoug/restoreproof-web`](https://hub.docker.com/r/yesitsmedoug/restoreproof-web)
 
 ### Compose (build from source)
 
@@ -72,7 +72,7 @@ Open **http://localhost:3080** — create the first admin, then add a host and r
 ## GitHub + Docker Hub
 
 - Source: https://github.com/hesseltined/RestoreProof  
-- Images: `hesseltined/restoreproof-api`, `hesseltined/restoreproof-web`
+- Images: `yesitsmedoug/restoreproof-api`, `yesitsmedoug/restoreproof-web`
 
 Maintainer publish (does **not** restart a running local compose stack):
 

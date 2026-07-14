@@ -2,8 +2,8 @@
 Purpose: App settings, SMTP, dashboard, users list, setup progress endpoints.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-12
-Version: 1.2.0
+Modified: 2026-07-13
+Version: 1.3.0
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from app.schemas import (
     SmtpUpdate,
     UserOut,
 )
-from app.security import encrypt_secret, hash_password
+from app.security import decrypt_secret, encrypt_secret, hash_password
 from app.services import locks
 from app.services.bootstrap import get_app_settings, get_smtp_settings
 from app.services.email_templates import apply_default_templates
@@ -41,6 +41,32 @@ from app.services.scheduler import build_schedule_plan, pick_next_guest, refresh
 from app.services.smtp_presets import list_presets
 
 router = APIRouter(tags=["settings"])
+
+
+def _secrets_health(db: Session) -> tuple[bool, str | None]:
+    """Return (needs_attention, message) if Fernet cannot decrypt stored secrets."""
+    broken: list[str] = []
+    for host in db.query(ProxmoxHost).all():
+        if not host.token_secret_enc:
+            continue
+        try:
+            decrypt_secret(host.token_secret_enc)
+        except ValueError:
+            broken.append(f"host “{host.name}” API token")
+    smtp = get_smtp_settings(db)
+    if smtp.password_enc:
+        try:
+            decrypt_secret(smtp.password_enc)
+        except ValueError:
+            broken.append("SMTP password")
+    if not broken:
+        return False, None
+    detail = (
+        "Stored secrets cannot be decrypted with the current SECRET_KEY: "
+        + ", ".join(broken)
+        + ". Re-enter those secrets on Hosts / Notifications, or restore the original SECRET_KEY."
+    )
+    return True, detail
 
 
 def _smtp_out(s) -> SmtpOut:
@@ -171,15 +197,25 @@ def setup_progress(
     guest_count = db.query(Guest).count()
     success_runs = db.query(RestoreRun).filter(RestoreRun.status == "success").count()
     any_runs = db.query(RestoreRun).count()
+    secrets_need_attention, secrets_message = _secrets_health(db)
 
     admin_done = db.query(User).count() > 0
     smtp_done = bool(smtp.smtp_ok_at) or (
         bool(smtp.host) and bool(smtp.from_email) and bool(smtp.password_enc)
     )
-    host_done = any(h.api_ok_at and h.ssh_ok_at for h in hosts)
+    # Host step not done if tokens cannot be decrypted
+    host_done = (not secrets_need_attention) and any(
+        h.api_ok_at and h.ssh_ok_at for h in hosts
+    )
     sync_done = any(h.last_sync_at for h in hosts) or guest_count > 0
     manual_done = success_runs > 0 or any_runs > 0
     schedule_done = bool(settings.schedule_enabled)
+
+    host_body = (
+        "API token + SSH key. Use Test API and Test SSH until both are green."
+        if not secrets_need_attention
+        else "SECRET_KEY mismatch: re-enter the Proxmox API token secret, then Test API / SSH."
+    )
 
     raw = [
         SetupStepOut(
@@ -192,21 +228,27 @@ def setup_progress(
         SetupStepOut(
             id="smtp",
             title="2. SMTP notifications",
-            body="Pick a provider preset and send a test email.",
+            body=(
+                "Pick a provider preset and send a test email."
+                if not secrets_need_attention
+                else "If mail fails after a SECRET_KEY change, re-enter the SMTP password."
+            ),
             to="/notifications",
-            done=smtp_done,
+            done=smtp_done and not (
+                secrets_need_attention and "SMTP" in (secrets_message or "")
+            ),
         ),
         SetupStepOut(
             id="host",
             title="3. Add Proxmox host",
-            body="API token + SSH key. Use Test API and Test SSH until both are green.",
+            body=host_body,
             to="/hosts",
             done=host_done,
         ),
         SetupStepOut(
             id="sync",
             title="4. Sync guests",
-            body="Pull VM/CT inventory from the host, then return here.",
+            body="Pull VM/CT inventory from the host. Token needs list rights (Privilege Separation off, or ACL).",
             to="/hosts",
             done=sync_done,
         ),
@@ -245,14 +287,42 @@ def setup_progress(
         for s in raw
     ]
     completed = sum(1 for s in steps if s.done)
+    wizard_completed = bool(getattr(settings, "setup_wizard_completed", False))
+    offer_wizard = (not wizard_completed) or secrets_need_attention
     return SetupProgressOut(
         steps=steps,
         completed_count=completed,
         total_count=len(steps),
-        all_done=completed == len(steps),
+        all_done=completed == len(steps) and not secrets_need_attention,
         next_step_id=next_id,
         next_path=next_path,
+        wizard_completed=wizard_completed,
+        secrets_need_attention=secrets_need_attention,
+        secrets_message=secrets_message,
+        offer_wizard=offer_wizard,
     )
+
+
+@router.post("/setup/wizard/complete")
+def setup_wizard_complete(
+    db: Session = Depends(get_db), _: User = Depends(get_current_user)
+) -> dict:
+    """Mark the guided setup checklist as completed (can re-offer if secrets break)."""
+    settings = get_app_settings(db)
+    settings.setup_wizard_completed = True
+    db.commit()
+    return {"ok": True, "setup_wizard_completed": True}
+
+
+@router.post("/setup/wizard/reopen")
+def setup_wizard_reopen(
+    db: Session = Depends(get_db), _: User = Depends(get_current_user)
+) -> dict:
+    """Show the guided setup checklist again without resetting admin setup."""
+    settings = get_app_settings(db)
+    settings.setup_wizard_completed = False
+    db.commit()
+    return {"ok": True, "setup_wizard_completed": False}
 
 
 @router.get("/dashboard", response_model=DashboardOut)

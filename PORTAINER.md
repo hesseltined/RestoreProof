@@ -86,7 +86,15 @@ Volumes `rp_pgdata` / `rp_data` / `rp_ssh` keep DB, evidence, and SSH keys.
 
 **Do not recreate the worker mid-restore.**
 
-## Troubleshooting
+## Setup wizard / SECRET_KEY remigration
+
+If Test API reports decrypt failure after rotating `SECRET_KEY`:
+
+1. Open Dashboard — Setup wizard is offered again (not forced)
+2. Re-enter Proxmox API token secret on **Hosts**, SMTP password on **Notifications**
+3. Mark the wizard complete when green
+
+Details: repo README “Setup wizard” section.
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|

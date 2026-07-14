@@ -1,14 +1,15 @@
 /**
- * Purpose: Dashboard overview with live restore progress.
+ * Purpose: Dashboard overview with live restore progress and optional setup wizard.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-12
- * Version: 1.1.0
+ * Modified: 2026-07-13
+ * Version: 1.2.0
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import { SetupWizardPanel } from "../components/SetupWizardPanel";
 
 type Run = {
   id: number;
@@ -88,6 +89,8 @@ export function DashboardPage() {
     <div>
       <h1 className="page-title">Dashboard</h1>
       <p className="page-sub">Restore drill status across connected Proxmox hosts.</p>
+
+      <SetupWizardPanel />
 
       {active && (
         <div className="card restore-progress-card">

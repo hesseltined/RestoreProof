@@ -68,6 +68,8 @@ class AppSettings(Base):
     schedule_coverage_goal: Mapped[str] = mapped_column(String(32), default="monthly")
     enforce_2fa: Mapped[bool] = mapped_column(Boolean, default=False)
     setup_completed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Guided setup checklist dismissed/completed (separate from first-admin setup_completed)
+    setup_wizard_completed: Mapped[bool] = mapped_column(Boolean, default=False)
     notify_on_success: Mapped[bool] = mapped_column(Boolean, default=True)
     notify_on_failure: Mapped[bool] = mapped_column(Boolean, default=True)
     notify_to: Mapped[str] = mapped_column(Text, default="")

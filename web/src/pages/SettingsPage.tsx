@@ -1,13 +1,14 @@
 /**
- * Purpose: App settings — boot wait, retention, branding, config export/import.
+ * Purpose: App settings — boot wait, retention, branding, config export/import, setup wizard.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-12
- * Version: 1.1.0
+ * Modified: 2026-07-13
+ * Version: 1.2.0
  */
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { api, downloadConfigExport, uploadConfigImport } from "../api";
+import { SetupWizardPanel } from "../components/SetupWizardPanel";
 
 type Settings = {
   branding_title: string;
@@ -109,6 +110,8 @@ export function SettingsPage() {
       <p className="page-sub">Boot wait, evidence retention, branding, and migration.</p>
       {msg && <p className="success">{msg}</p>}
       {error && <p className="error">{error}</p>}
+
+      <SetupWizardPanel forceOpen />
 
       <section className="card config-transfer-card">
         <h2 className="section-title">Export / Import configuration</h2>

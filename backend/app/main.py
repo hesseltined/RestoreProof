@@ -19,7 +19,7 @@ from app.database import Base, SessionLocal, engine, ensure_schema
 from app.services.bootstrap import ensure_defaults
 from app.services.secrets_guard import validate_runtime_secrets
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 
 app = FastAPI(title="RestoreProof", version=APP_VERSION)
 

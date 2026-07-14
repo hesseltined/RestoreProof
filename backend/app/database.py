@@ -51,6 +51,7 @@ def ensure_schema() -> None:
         "ALTER TABLE restore_runs ADD COLUMN IF NOT EXISTS used_fallback_backup BOOLEAN DEFAULT FALSE",
         "ALTER TABLE restore_runs ADD COLUMN IF NOT EXISTS backups_attempted INTEGER DEFAULT 0",
         "ALTER TABLE restore_runs ADD COLUMN IF NOT EXISTS result_summary TEXT DEFAULT ''",
+        "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS setup_wizard_completed BOOLEAN DEFAULT FALSE",
     ]
     with engine.begin() as conn:
         for stmt in statements:

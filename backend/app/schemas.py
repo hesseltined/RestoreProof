@@ -340,3 +340,9 @@ class SetupProgressOut(BaseModel):
     all_done: bool
     next_step_id: Optional[str] = None
     next_path: Optional[str] = None
+    wizard_completed: bool = False
+    # True when stored Proxmox/SMTP secrets fail Fernet decrypt (wrong SECRET_KEY)
+    secrets_need_attention: bool = False
+    secrets_message: Optional[str] = None
+    # Offer wizard when not marked complete, or when secrets are broken (not forced)
+    offer_wizard: bool = True

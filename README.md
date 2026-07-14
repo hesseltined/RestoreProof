@@ -88,6 +88,14 @@ Maintainer publish (does **not** restart a running local compose stack):
 
 Full notes: [DEVELOPING.md](DEVELOPING.md)
 
+## Setup wizard
+
+After first admin creation, the Dashboard may show a **Setup wizard** checklist (SMTP, host, sync, manual drill, schedule).
+
+- **Mark setup complete** hides it (not forced — you can hide temporarily).
+- If stored Proxmox/SMTP secrets fail to decrypt (wrong `SECRET_KEY` after a rebuild), the wizard is **offered again** with a clear message — still not forced.
+- Settings always shows the wizard so you can reopen or mark complete anytime.
+
 ## Security notes
 
 - Use a dedicated Proxmox API token with restore/start/stop/delete rights on test VMIDs

@@ -32,6 +32,7 @@ APP_SETTINGS_FIELDS = (
     "schedule_coverage_goal",
     "enforce_2fa",
     "setup_completed",
+    "setup_wizard_completed",
     "notify_on_success",
     "notify_on_failure",
     "notify_to",

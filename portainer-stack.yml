@@ -1,62 +1,40 @@
-# RestoreProof — Portainer stack
+# RestoreProof — Portainer-safe stack (keep this simple)
 # Author: Doug Hesseltine
 # Created: 2026-07-12
-# Modified: 2026-07-12
-# Version: 1.6.0
+# Modified: 2026-07-13
+# Version: 1.6.2
 #
-# REQUIRED Portainer environment variables (set in the UI — do not paste secrets into YAML):
-#   POSTGRES_PASSWORD   — openssl rand -hex 24   (alphanumeric ONLY; no # @ : / ? % &)
-#   API_SECRET_KEY      — openssl rand -hex 32   (32+ chars; Fernet + JWT)
-#   WORKER_SECRET_KEY   — MUST be identical to API_SECRET_KEY
+# In Portainer Environment variables, set EXACTLY these two names:
+#   SECRET_KEY
+#   POSTGRES_PASSWORD
 #
-# Why hex-only?
-#   - '#' in YAML starts a comment → truncated password → API crash-loop
-#   - '#' in DATABASE_URL starts a URL fragment → wrong password sent to Postgres
-#   - Changing POSTGRES_PASSWORD after first boot does NOT update an existing volume
-#
-# Config import / migration:
-#   Copy the SAME API_SECRET_KEY (and ENCRYPTION_KEY if set) from the source install,
-#   or re-enter every Proxmox token secret and SMTP password after import.
-#
-# Optional under api + worker:
-#   APP_BASE_URL: https://restoreproof.example.com
+# Do not use API_SECRET_KEY / WORKER_SECRET_KEY with this file.
+# Do not put # & % in POSTGRES_PASSWORD.
+# Generate: openssl rand -hex 32   and   openssl rand -hex 24
 
 services:
   db:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: restoreproof
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD via Portainer env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: restoreproof
     volumes:
       - rp_pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U restoreproof -d restoreproof"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
     restart: unless-stopped
 
   api:
     image: yesitsmedoug/restoreproof-api:latest
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     environment:
-      # Password must be URL-safe (hex). See header comments.
       DATABASE_URL: postgresql+psycopg://restoreproof:${POSTGRES_PASSWORD}@db:5432/restoreproof
-      SECRET_KEY: ${API_SECRET_KEY:?set API_SECRET_KEY via Portainer env}
+      SECRET_KEY: ${SECRET_KEY}
       DATA_DIR: /data
     volumes:
       - rp_data:/data
       - rp_ssh:/root/.ssh
     depends_on:
-      db:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 25s
+      - db
     restart: unless-stopped
 
   worker:
@@ -64,16 +42,14 @@ services:
     command: python -m app.worker
     environment:
       DATABASE_URL: postgresql+psycopg://restoreproof:${POSTGRES_PASSWORD}@db:5432/restoreproof
-      SECRET_KEY: ${WORKER_SECRET_KEY:?set WORKER_SECRET_KEY via Portainer env}
+      SECRET_KEY: ${SECRET_KEY}
       DATA_DIR: /data
     volumes:
       - rp_data:/data
       - rp_ssh:/root/.ssh
     depends_on:
-      db:
-        condition: service_healthy
-      api:
-        condition: service_healthy
+      - db
+      - api
     restart: unless-stopped
 
   web:
@@ -81,8 +57,7 @@ services:
     ports:
       - "3080:80"
     depends_on:
-      api:
-        condition: service_healthy
+      - api
     restart: unless-stopped
 
 volumes:

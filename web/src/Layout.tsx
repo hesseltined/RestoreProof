@@ -3,7 +3,7 @@
  * Author: Doug Hesseltine
  * Created: 2026-07-12
  * Modified: 2026-07-22
- * Version: 1.3.0
+ * Version: 1.3.1
  */
 
 import { useState } from "react";

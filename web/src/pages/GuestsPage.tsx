@@ -2,8 +2,8 @@
  * Purpose: Guest inventory with exclude, schedule override, run now.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-12
- * Version: 1.7.0
+ * Modified: 2026-07-22
+ * Version: 1.8.0
  */
 
 import { useEffect, useState } from "react";
@@ -14,6 +14,15 @@ import {
   describeBuilder,
   type TimeDisplay,
 } from "../components/CronScheduleBuilder";
+
+type GuestLatestRun = {
+  id: number;
+  status: string;
+  used_fallback_backup: boolean;
+  finished_at: string | null;
+  started_at: string | null;
+  error_message: string | null;
+};
 
 type Guest = {
   id: number;
@@ -31,6 +40,7 @@ type Guest = {
   schedule_enabled: boolean;
   last_tested_at: string | null;
   next_due_at: string | null;
+  latest_run: GuestLatestRun | null;
 };
 
 /** Friendly presets → UTC cron. Empty string = use global fleet rotation. */
@@ -86,6 +96,72 @@ function presetValueForCron(cron: string | null): string {
   if (!cron) return "";
   const known = SCHEDULE_PRESETS.find((p) => p.value === cron);
   return known ? known.value : "__custom__";
+}
+
+function proofTone(run: GuestLatestRun | null): "ok" | "warn" | "fail" | "run" | "none" {
+  if (!run) return "none";
+  if (run.status === "failed") return "fail";
+  if (run.status === "success" && run.used_fallback_backup) return "warn";
+  if (run.status === "success") return "ok";
+  if (run.status === "queued" || run.status === "running") return "run";
+  return "none";
+}
+
+function proofTitle(run: GuestLatestRun | null): string {
+  if (!run) return "No restore drills yet";
+  const when = formatDue(run.finished_at || run.started_at);
+  if (run.status === "success" && run.used_fallback_backup) {
+    return `Last restore: success (older backup)${when ? ` · ${when}` : ""}`;
+  }
+  if (run.status === "success") {
+    return `Last restore: success${when ? ` · ${when}` : ""}`;
+  }
+  if (run.status === "failed") {
+    const err = run.error_message ? ` — ${run.error_message}` : "";
+    return `Last restore: failed${when ? ` · ${when}` : ""}${err}`;
+  }
+  if (run.status === "running") return "Restore drill in progress…";
+  if (run.status === "queued") return "Restore drill queued…";
+  return `Last restore: ${run.status}${when ? ` · ${when}` : ""}`;
+}
+
+function proofMark(tone: ReturnType<typeof proofTone>): string {
+  if (tone === "ok") return "✓";
+  if (tone === "warn") return "!";
+  if (tone === "fail") return "✕";
+  if (tone === "run") return "…";
+  return "·";
+}
+
+function RestoreProofLamp({ run }: { run: GuestLatestRun | null }) {
+  const tone = proofTone(run);
+  const title = proofTitle(run);
+  const mark = proofMark(tone);
+  const className = `guest-proof-lamp guest-proof-lamp--${tone}`;
+
+  if (run) {
+    return (
+      <Link
+        to={`/runs/${run.id}`}
+        className={className}
+        title={title}
+        aria-label={title}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <span className="guest-proof-lamp-mark" aria-hidden>
+          {mark}
+        </span>
+      </Link>
+    );
+  }
+
+  return (
+    <span className={className} title={title} aria-label={title}>
+      <span className="guest-proof-lamp-mark" aria-hidden>
+        {mark}
+      </span>
+    </span>
+  );
 }
 
 function ScheduleOverrideCell({
@@ -214,7 +290,8 @@ export function GuestsPage() {
         Inventory from your Proxmox hosts. Specs refresh when you{" "}
         <Link to="/hosts">sync a host</Link>. Nightly restore drills are configured on{" "}
         <Link to="/schedule">Schedule</Link> — use <strong>Test schedule</strong> only if one guest
-        should run on a different cadence.
+        should run on a different cadence. Hover the lamp next to each power status for the last
+        restore result.
       </p>
       {error && <p className="error">{error}</p>}
 
@@ -276,9 +353,14 @@ export function GuestsPage() {
                 <td className="mono">{g.vmid}</td>
                 <td>
                   {g.name}
-                  {g.status ? (
-                    <div className={`guest-status ${guestStatusClass(g.status)}`}>{g.status}</div>
-                  ) : null}
+                  <div className="guest-status-row">
+                    {g.status ? (
+                      <span className={`guest-status ${guestStatusClass(g.status)}`}>{g.status}</span>
+                    ) : (
+                      <span className="guest-status other">unknown</span>
+                    )}
+                    <RestoreProofLamp run={g.latest_run} />
+                  </div>
                 </td>
                 <td>
                   <span className="badge">{g.guest_type}</span>

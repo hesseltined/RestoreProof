@@ -2,8 +2,8 @@
  * Purpose: Global RestoreProof styles (light/dark, uncluttered ops console).
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-12
- * Version: 1.5.0
+ * Modified: 2026-07-22
+ * Version: 1.7.0
  */
 
 :root,
@@ -188,6 +188,15 @@ textarea {
   position: sticky;
   top: 0;
   z-index: 5;
+}
+
+.demo-banner {
+  padding: 0.65rem 1.5rem;
+  background: color-mix(in srgb, var(--accent, #0f766e) 18%, var(--surface));
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 0.9rem;
+  line-height: 1.4;
 }
 
 .content {
@@ -533,6 +542,10 @@ table.data th {
   margin-bottom: 1.25rem;
 }
 
+.setup-wizard-collapsed {
+  padding-bottom: 0.85rem;
+}
+
 .setup-wizard-alert {
   border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
 }
@@ -622,11 +635,19 @@ table.data th {
   margin-top: 0.25rem;
 }
 
+.guest-status-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+  max-width: 100%;
+}
+
 .guest-status {
   font-size: 0.82rem;
   font-weight: 600;
-  margin-top: 0.2rem;
   text-transform: capitalize;
+  line-height: 1;
 }
 
 .guest-status.running {
@@ -639,6 +660,81 @@ table.data th {
 
 .guest-status.other {
   color: var(--muted);
+}
+
+/* Tiny last-restore lamp beside VM power status — no extra table column. */
+.guest-proof-lamp {
+  --lamp: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.95rem;
+  height: 0.95rem;
+  border-radius: 999px;
+  flex-shrink: 0;
+  text-decoration: none;
+  color: #fff;
+  background: color-mix(in srgb, var(--lamp) 88%, #000 12%);
+  box-shadow:
+    0 0 0 1.5px color-mix(in srgb, var(--lamp) 35%, transparent),
+    0 0 8px color-mix(in srgb, var(--lamp) 45%, transparent);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+a.guest-proof-lamp:hover {
+  transform: scale(1.12);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--lamp) 55%, transparent),
+    0 0 12px color-mix(in srgb, var(--lamp) 55%, transparent);
+}
+
+.guest-proof-lamp-mark {
+  font-size: 0.55rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.guest-proof-lamp--ok {
+  --lamp: var(--ok);
+}
+
+.guest-proof-lamp--fail {
+  --lamp: var(--danger);
+}
+
+.guest-proof-lamp--warn {
+  --lamp: var(--warn);
+  color: #1a1205;
+}
+
+.guest-proof-lamp--run {
+  --lamp: var(--warn);
+  color: #1a1205;
+  animation: guest-proof-pulse 1.4s ease-in-out infinite;
+}
+
+.guest-proof-lamp--none {
+  --lamp: var(--muted);
+  color: color-mix(in srgb, var(--muted) 70%, var(--surface));
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--muted) 55%, transparent);
+}
+
+@keyframes guest-proof-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow:
+      0 0 0 1.5px color-mix(in srgb, var(--lamp) 35%, transparent),
+      0 0 6px color-mix(in srgb, var(--lamp) 35%, transparent);
+  }
+  50% {
+    opacity: 0.72;
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--lamp) 50%, transparent),
+      0 0 12px color-mix(in srgb, var(--lamp) 55%, transparent);
+  }
 }
 
 .field-hint {
@@ -1288,4 +1384,100 @@ table.data th {
   .config-transfer-grid {
     grid-template-columns: 1fr;
   }
+}
+
+.pager-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.25rem;
+  margin: 0 0 0.85rem;
+}
+
+.pager-bar--bottom {
+  margin: 0.85rem 0 0;
+  justify-content: flex-end;
+}
+
+.pager-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.pager-size select {
+  width: auto;
+  min-width: 4.5rem;
+  padding: 0.3rem 0.5rem;
+}
+
+.pager-meta {
+  margin-right: auto;
+}
+
+.pager-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.pager-page {
+  font-size: 0.85rem;
+  color: var(--muted);
+  min-width: 3.5rem;
+  text-align: center;
+}
+
+.run-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.purge-runs-card {
+  margin-top: 1.25rem;
+}
+
+.purge-runs-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 1rem;
+}
+
+.purge-runs-row .field {
+  margin-bottom: 0;
+  min-width: 14rem;
+}
+
+.run-status-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.remediated-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  border-radius: 999px;
+  text-decoration: none;
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1;
+  color: #042f2e;
+  background: var(--ok);
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--ok) 40%, transparent);
+}
+
+.remediated-mark:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--ok) 55%, transparent),
+    0 0 10px color-mix(in srgb, var(--ok) 45%, transparent);
 }

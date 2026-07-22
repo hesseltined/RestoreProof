@@ -2,8 +2,8 @@
  * Purpose: App settings — boot wait, retention, branding, config export/import, setup wizard.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-13
- * Version: 1.2.0
+ * Modified: 2026-07-22
+ * Version: 1.3.1
  */
 
 import { FormEvent, useEffect, useRef, useState } from "react";
@@ -27,6 +27,18 @@ type ImportSummary = {
   users_skipped: number;
 };
 
+/** Local date input → ISO midnight UTC for that calendar day (purge before start of day). */
+function localDateToUtcIso(dateStr: string): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d, 0, 0, 0)).toISOString();
+}
+
+function defaultPurgeDate(): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - 30);
+  return d.toISOString().slice(0, 10);
+}
+
 export function SettingsPage() {
   const [form, setForm] = useState<Settings | null>(null);
   const [msg, setMsg] = useState("");
@@ -37,6 +49,8 @@ export function SettingsPage() {
   const [importUsers, setImportUsers] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
+  const [purgeBefore, setPurgeBefore] = useState(defaultPurgeDate);
+  const [purgeBusy, setPurgeBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -102,6 +116,44 @@ export function SettingsPage() {
     }
   }
 
+  async function onPurgeRuns() {
+    if (!purgeBefore) {
+      setError("Choose a cutoff date first.");
+      return;
+    }
+    const label = new Date(localDateToUtcIso(purgeBefore)).toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      timeZone: "UTC",
+    });
+    if (
+      !window.confirm(
+        `Permanently delete all restore runs (and evidence files) created before ${label} UTC?\n\nThis cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    setPurgeBusy(true);
+    setError("");
+    setMsg("");
+    try {
+      const res = await api<{ deleted: number; before: string }>("/settings/purge-runs", {
+        method: "POST",
+        body: JSON.stringify({ before: localDateToUtcIso(purgeBefore) }),
+      });
+      setMsg(
+        res.deleted === 0
+          ? "No runs matched that cutoff — nothing deleted."
+          : `Purged ${res.deleted} run${res.deleted === 1 ? "" : "s"} older than ${label} UTC.`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Purge failed");
+    } finally {
+      setPurgeBusy(false);
+    }
+  }
+
   if (!form) return <p className="help">Loading…</p>;
 
   return (
@@ -111,7 +163,7 @@ export function SettingsPage() {
       {msg && <p className="success">{msg}</p>}
       {error && <p className="error">{error}</p>}
 
-      <SetupWizardPanel forceOpen />
+      <SetupWizardPanel alwaysShowShell />
 
       <section className="card config-transfer-card">
         <h2 className="section-title">Export / Import configuration</h2>
@@ -244,6 +296,34 @@ export function SettingsPage() {
           Save
         </button>
       </form>
+
+      <section className="card purge-runs-card">
+        <h2 className="section-title">Purge run history</h2>
+        <p className="help">
+          Permanently delete restore drill results and evidence files older than a cutoff date.
+          Automatic retention (above) still runs on its own schedule — this is a one-shot admin
+          cleanup.
+        </p>
+        <div className="purge-runs-row">
+          <div className="field">
+            <label>Delete runs created before (UTC date)</label>
+            <input
+              type="date"
+              value={purgeBefore}
+              max={new Date().toISOString().slice(0, 10)}
+              onChange={(e) => setPurgeBefore(e.target.value)}
+            />
+          </div>
+          <button
+            className="btn danger"
+            type="button"
+            disabled={purgeBusy || !purgeBefore}
+            onClick={onPurgeRuns}
+          >
+            {purgeBusy ? "Purging…" : "Purge older runs"}
+          </button>
+        </div>
+      </section>
     </div>
   );
 }

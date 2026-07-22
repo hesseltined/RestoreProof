@@ -2,8 +2,8 @@
 Purpose: RestoreProof FastAPI application entrypoint.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-12
-Version: 1.2.0
+Modified: 2026-07-22
+Version: 1.3.0
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from app.database import Base, SessionLocal, engine, ensure_schema
 from app.services.bootstrap import ensure_defaults
 from app.services.secrets_guard import validate_runtime_secrets
 
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.3.0"
 
 app = FastAPI(title="RestoreProof", version=APP_VERSION)
 

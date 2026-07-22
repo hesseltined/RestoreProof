@@ -2,8 +2,8 @@
 Purpose: Proxmox VE REST API client (token auth).
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-12
-Version: 1.3.0
+Modified: 2026-07-13
+Version: 1.4.0
 """
 
 from __future__ import annotations
@@ -336,9 +336,43 @@ def qemu_hostdev_keys(cfg: dict) -> list[str]:
     ]
 
 
+_MP_KEY_RE = re.compile(r"^mp\d+$")
+
+
+def lxc_host_mount_keys(cfg: dict) -> list[str]:
+    """
+    LXC mpN keys that are host bind/device mounts (not storage volumes).
+
+    Bind/device mounts use an absolute host path as the volume (e.g.
+    ``/mnt/share,mp=/data``). Storage volumes use ``storage:vol`` syntax.
+    Only root@pam (not API tokens) may restore these via the API.
+    """
+    keys: list[str] = []
+    for k, v in cfg.items():
+        ks = str(k)
+        if not _MP_KEY_RE.match(ks):
+            continue
+        volume = str(v or "").split(",", 1)[0].strip()
+        if volume.startswith("/"):
+            keys.append(ks)
+    return keys
+
+
 def is_hostdev_privilege_error(exc: BaseException) -> bool:
     """True when Proxmox rejected USB/PCI config because the caller is not root."""
     msg = str(exc).lower()
     if "only root can set" not in msg:
         return False
     return "usb" in msg or "hostpci" in msg
+
+
+def is_lxc_mount_privilege_error(exc: BaseException) -> bool:
+    """True when CT restore/config needs root for bind or device mounts."""
+    msg = str(exc).lower()
+    if "only possible for root" in msg and (
+        "bind mount" in msg or "device mount" in msg
+    ):
+        return True
+    if "only root" in msg and ("bind mount" in msg or "device mount" in msg):
+        return True
+    return False

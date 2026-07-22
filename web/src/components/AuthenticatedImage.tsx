@@ -2,12 +2,14 @@
  * Purpose: Fetch authenticated evidence/image blobs for display.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-12
- * Version: 1.1.0
+ * Modified: 2026-07-22
+ * Version: 1.3.0
  */
 
 import { useEffect, useState } from "react";
 import { getToken } from "../api";
+import { isDemoMode } from "../demo/mode";
+import { demoApiFetch } from "../demo/mockApi";
 
 export function AuthenticatedImage({
   path,
@@ -28,9 +30,11 @@ export function AuthenticatedImage({
     setError("");
     (async () => {
       try {
-        const res = await fetch(`/api${path}`, {
-          headers: { Authorization: `Bearer ${getToken()}` },
-        });
+        const res = isDemoMode()
+          ? await demoApiFetch(path)
+          : await fetch(`/api${path}`, {
+              headers: { Authorization: `Bearer ${getToken()}` },
+            });
         if (cancelled) return;
         if (!res.ok) {
           setError(res.status === 404 ? "Evidence file missing" : `Failed to load (${res.status})`);

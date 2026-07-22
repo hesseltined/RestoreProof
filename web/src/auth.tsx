@@ -1,8 +1,9 @@
 /**
- * Purpose: Auth + theme context for RestoreProof UI.
+ * Purpose: Auth + theme context for RestoreProof UI (includes /demo auto-login).
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Version: 1.0.0
+ * Modified: 2026-07-22
+ * Version: 1.2.0
  */
 
 import {
@@ -15,6 +16,7 @@ import {
   type ReactNode,
 } from "react";
 import { api, getToken, setToken } from "./api";
+import { isDemoMode } from "./demo/mode";
 
 export type User = {
   id: number;
@@ -29,6 +31,7 @@ type AuthState = {
   loading: boolean;
   setupRequired: boolean;
   theme: "light" | "dark";
+  demo: boolean;
   login: (email: string, password: string, totp?: string) => Promise<{ requires_2fa?: boolean }>;
   logout: () => void;
   refreshMe: () => Promise<void>;
@@ -38,9 +41,18 @@ type AuthState = {
 
 const AuthContext = createContext<AuthState | null>(null);
 
+const DEMO_USER: User = {
+  id: 1,
+  email: "demo@restoreproof.example",
+  is_active: true,
+  is_admin: true,
+  totp_enabled: true,
+};
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const demo = isDemoMode();
+  const [user, setUser] = useState<User | null>(demo ? DEMO_USER : null);
+  const [loading, setLoading] = useState(!demo);
   const [setupRequired, setSetupRequired] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     const saved = localStorage.getItem("rp_theme");
@@ -53,6 +65,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [theme]);
 
   const refreshMe = useCallback(async () => {
+    if (isDemoMode()) {
+      setSetupRequired(false);
+      setUser(DEMO_USER);
+      return;
+    }
     const status = await api<{ setup_completed: boolean; user_count: number }>("/auth/status");
     if (!status.setup_completed || status.user_count === 0) {
       setSetupRequired(true);
@@ -74,11 +91,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (demo) {
+      setLoading(false);
+      return;
+    }
     refreshMe().finally(() => setLoading(false));
-  }, [refreshMe]);
+  }, [demo, refreshMe]);
 
   const login = useCallback(
     async (email: string, password: string, totp?: string) => {
+      if (isDemoMode()) {
+        setUser(DEMO_USER);
+        return {};
+      }
       const res = await api<{
         access_token: string;
         requires_2fa?: boolean;
@@ -101,6 +126,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const completeSetup = useCallback(
     async (email: string, password: string) => {
+      if (isDemoMode()) {
+        setUser(DEMO_USER);
+        setSetupRequired(false);
+        return;
+      }
       const res = await api<{ access_token: string }>("/auth/setup", {
         method: "POST",
         body: JSON.stringify({ email, password }),
@@ -113,6 +143,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(() => {
+    if (isDemoMode()) return;
     setToken(null);
     setUser(null);
   }, []);
@@ -127,13 +158,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loading,
       setupRequired,
       theme,
+      demo,
       login,
       logout,
       refreshMe,
       toggleTheme,
       completeSetup,
     }),
-    [user, loading, setupRequired, theme, login, logout, refreshMe, toggleTheme, completeSetup]
+    [user, loading, setupRequired, theme, demo, login, logout, refreshMe, toggleTheme, completeSetup]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

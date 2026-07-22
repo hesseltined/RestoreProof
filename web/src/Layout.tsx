@@ -2,8 +2,8 @@
  * Purpose: App shell with collapsible sidebar nav on every page.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-12
- * Version: 1.1.1
+ * Modified: 2026-07-22
+ * Version: 1.3.0
  */
 
 import { useState } from "react";
@@ -23,7 +23,7 @@ const NAV = [
 ];
 
 export function Layout() {
-  const { user, logout, toggleTheme, theme } = useAuth();
+  const { user, logout, toggleTheme, theme, demo } = useAuth();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileHidden, setMobileHidden] = useState(true);
   const navigate = useNavigate();
@@ -59,20 +59,28 @@ export function Layout() {
           <button className="btn ghost" type="button" onClick={toggleTheme}>
             {theme === "light" ? "Dark" : "Light"} mode
           </button>
-          <button
-            className="btn ghost"
-            type="button"
-            onClick={() => {
-              logout();
-              navigate("/login");
-            }}
-          >
-            <span>Sign out</span>
-          </button>
+          {!demo && (
+            <button
+              className="btn ghost"
+              type="button"
+              onClick={() => {
+                logout();
+                navigate("/login");
+              }}
+            >
+              <span>Sign out</span>
+            </button>
+          )}
           {!collapsed && <VersionFooter variant="app" />}
         </div>
       </aside>
       <div className="main">
+        {demo && (
+          <div className="demo-banner" role="status">
+            Interactive demo — sample data, no login required. Changes stay in this browser
+            session only.
+          </div>
+        )}
         <header className="topbar">
           <div className="row-actions">
             <button
@@ -82,7 +90,7 @@ export function Layout() {
             >
               Menu
             </button>
-            <strong>RestoreProof</strong>
+            <strong>RestoreProof{demo ? " Demo" : ""}</strong>
           </div>
           <div className="row-actions">
             <span className="help">{user?.email}</span>

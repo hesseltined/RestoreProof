@@ -2,23 +2,26 @@
  * Purpose: Dashboard overview with live restore progress and optional setup wizard.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-13
- * Version: 1.2.0
+ * Modified: 2026-07-22
+ * Version: 1.4.0
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { SetupWizardPanel } from "../components/SetupWizardPanel";
 
 type Run = {
   id: number;
+  guest_id?: number | null;
   source_name: string;
   source_vmid: number;
   status: string;
   created_at: string;
   progress_pct?: number | null;
   progress_label?: string | null;
+  remediated?: boolean;
+  remediated_by_run_id?: number | null;
 };
 
 type ActiveRun = {
@@ -50,6 +53,8 @@ type Dashboard = {
 export function DashboardPage() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [error, setError] = useState("");
+  const [retryBusyId, setRetryBusyId] = useState<number | null>(null);
+  const navigate = useNavigate();
 
   const load = useCallback(async () => {
     const d = await api<Dashboard>("/dashboard");
@@ -61,6 +66,18 @@ export function DashboardPage() {
     load().catch((e) => setError(e.message));
   }, [load]);
 
+  async function retry(runId: number) {
+    setError("");
+    setRetryBusyId(runId);
+    try {
+      const created = await api<{ id: number }>(`/runs/${runId}/retry`, { method: "POST" });
+      await load();
+      navigate(`/runs/${created.id}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Retry failed");
+      setRetryBusyId(null);
+    }
+  }
   // Poll while a restore is queued or running
   useEffect(() => {
     if (!data?.active_run) return;
@@ -192,6 +209,7 @@ export function DashboardPage() {
                 <th>Guest</th>
                 <th>Status</th>
                 <th>When</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -204,23 +222,68 @@ export function DashboardPage() {
                     {r.source_name} <span className="mono">({r.source_vmid})</span>
                   </td>
                   <td>
-                    <span
-                      className={`badge ${
-                        r.status === "success" ? "ok" : r.status === "failed" ? "fail" : "run"
-                      }`}
-                    >
-                      {r.status}
-                      {r.status === "running" && r.progress_pct != null
-                        ? ` · ${Math.round(r.progress_pct)}%`
-                        : ""}
+                    <span className="run-status-cell">
+                      <span
+                        className={`badge ${
+                          r.status === "success"
+                            ? "ok"
+                            : r.status === "failed"
+                              ? "fail"
+                              : "run"
+                        }`}
+                      >
+                        {r.status}
+                        {r.status === "running" && r.progress_pct != null
+                          ? ` · ${Math.round(r.progress_pct)}%`
+                          : ""}
+                      </span>
+                      {r.status === "failed" && r.remediated && (
+                        <Link
+                          to={
+                            r.remediated_by_run_id
+                              ? `/runs/${r.remediated_by_run_id}`
+                              : `/runs/${r.id}`
+                          }
+                          className="remediated-mark"
+                          title={
+                            r.remediated_by_run_id
+                              ? `Remediated — this guest passed on run #${r.remediated_by_run_id}`
+                              : "Remediated — later restore succeeded"
+                          }
+                          aria-label={
+                            r.remediated_by_run_id
+                              ? `Remediated by run ${r.remediated_by_run_id}`
+                              : "Remediated"
+                          }
+                        >
+                          <span aria-hidden>↑</span>
+                        </Link>
+                      )}
                     </span>
                   </td>
                   <td>{new Date(r.created_at).toLocaleString()}</td>
+                  <td className="row-actions">
+                    {r.status === "failed" && !r.remediated && (
+                      <button
+                        className="btn small"
+                        type="button"
+                        disabled={retryBusyId === r.id || !r.guest_id}
+                        title={
+                          r.guest_id
+                            ? "Queue another restore drill for this guest"
+                            : "Guest no longer in inventory"
+                        }
+                        onClick={() => retry(r.id)}
+                      >
+                        {retryBusyId === r.id ? "Retrying…" : "Retry"}
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
               {!data.recent_runs.length && (
                 <tr>
-                  <td colSpan={4} className="help">
+                  <td colSpan={5} className="help">
                     No runs yet. Sync a host and use Run now on a guest.
                   </td>
                 </tr>
@@ -228,6 +291,11 @@ export function DashboardPage() {
             </tbody>
           </table>
         </div>
+        <p className="help" style={{ marginBottom: 0, marginTop: "0.75rem" }}>
+          Green ↑ on a recent failure means that guest passed a restore again within a week
+          of that failure — the failure is kept for history. Use Retry on open failures to
+          re-queue a drill.
+        </p>
       </div>
     </div>
   );

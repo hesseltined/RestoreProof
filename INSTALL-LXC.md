@@ -109,7 +109,7 @@ Grant privileges needed to:
 
 Least privilege is preferred; many homelabs use a token with Administrator on the node for simplicity—tighten for production.
 
-## 5. SSH key for screenshots
+## 5. SSH key for screenshots and root-only restores
 
 In RestoreProof → **Hosts** → **SSH key**.
 
@@ -124,7 +124,13 @@ chmod 600 /root/.ssh/authorized_keys
 
 Complete the host checklist: **1 · Test API** → **2 · Test SSH** → **3 · Sync guests**.
 
-Use **Test SSH** in the UI before relying on VM screenshots. LXC restores use status JSON evidence instead of VGA screenshots.
+Use **Test SSH** in the UI before relying on:
+
+- VM console screenshots
+- VMs with USB/PCI host passthrough (API tokens cannot restore those)
+- CTs with host **bind mounts** (`mp0` etc.) — Proxmox only allows root to restore bind mounts; RestoreProof falls back to `pct restore` over SSH
+
+LXC evidence is status JSON (not VGA screenshots).
 
 ## 6. First drill
 

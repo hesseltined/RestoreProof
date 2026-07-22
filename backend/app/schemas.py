@@ -2,8 +2,8 @@
 Purpose: Pydantic request/response schemas.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-12
-Version: 1.4.0
+Modified: 2026-07-22
+Version: 1.7.0
 """
 
 from __future__ import annotations
@@ -101,6 +101,17 @@ class AppSettingsUpdate(BaseModel):
     email_failure_subject: Optional[str] = None
     email_success_body: Optional[str] = None
     email_failure_body: Optional[str] = None
+
+
+class PurgeRunsRequest(BaseModel):
+    """Delete restore runs created strictly before this UTC datetime (ISO)."""
+
+    before: datetime
+
+
+class PurgeRunsOut(BaseModel):
+    deleted: int
+    before: datetime
 
 
 class SchedulePlanOut(BaseModel):
@@ -225,6 +236,17 @@ class HostOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class GuestLatestRunOut(BaseModel):
+    """Compact last restore attempt for the Guests inventory row."""
+
+    id: int
+    status: str
+    used_fallback_backup: bool = False
+    finished_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+
+
 class GuestOut(BaseModel):
     id: int
     host_id: int
@@ -242,6 +264,7 @@ class GuestOut(BaseModel):
     schedule_enabled: bool
     last_tested_at: Optional[datetime]
     next_due_at: Optional[datetime]
+    latest_run: Optional[GuestLatestRunOut] = None
 
     model_config = {"from_attributes": True}
 
@@ -280,12 +303,22 @@ class RunOut(BaseModel):
     started_at: Optional[datetime]
     finished_at: Optional[datetime]
     created_at: datetime
+    # Dashboard enrichment: failed run (≤7 days) later succeeded for same guest
+    remediated: bool = False
+    remediated_by_run_id: Optional[int] = None
 
     model_config = {"from_attributes": True}
 
 
 class RunDetail(RunOut):
     log_text: str
+
+
+class RunPageOut(BaseModel):
+    items: list[RunOut]
+    total: int
+    page: int
+    page_size: int
 
 
 class ActiveRunOut(BaseModel):

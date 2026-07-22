@@ -2,7 +2,8 @@
 Purpose: Retention cleanup for old restore runs and evidence files.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Version: 1.0.0
+Modified: 2026-07-22
+Version: 1.1.0
 """
 
 from __future__ import annotations
@@ -81,3 +82,28 @@ def _delete_run_files(run: RestoreRun) -> None:
             Path(run.evidence_path).unlink(missing_ok=True)
         except OSError:
             logger.warning("Could not delete evidence %s", run.evidence_path)
+
+
+def purge_runs_before(db: Session, before: datetime) -> int:
+    """
+    Delete all restore runs created strictly before ``before`` (UTC),
+    including evidence files. Intended for explicit admin purge.
+    """
+    if before.tzinfo is None:
+        before = before.replace(tzinfo=timezone.utc)
+    else:
+        before = before.astimezone(timezone.utc)
+
+    rows = (
+        db.query(RestoreRun)
+        .filter(RestoreRun.created_at < before)
+        .order_by(RestoreRun.created_at.asc())
+        .all()
+    )
+    deleted = 0
+    for run in rows:
+        _delete_run_files(run)
+        db.delete(run)
+        deleted += 1
+    db.commit()
+    return deleted

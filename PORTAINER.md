@@ -80,7 +80,7 @@ Settings → **Export / Import configuration** moves hosts, SMTP, schedules, and
 
 Edit stack → **Pull and redeploy** (`latest` tag).
 
-To pin a version: `yesitsmedoug/restoreproof-api:1.2.0` and `yesitsmedoug/restoreproof-web:1.2.0`.
+To pin a version: `yesitsmedoug/restoreproof-api:1.3.0` and `yesitsmedoug/restoreproof-web:1.3.0`.
 
 Volumes `rp_pgdata` / `rp_data` / `rp_ssh` keep DB, evidence, and SSH keys.
 

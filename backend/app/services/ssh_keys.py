@@ -1,9 +1,9 @@
 """
-Purpose: SSH helpers for QMP screendump, qmrestore fallback, and key generation.
+Purpose: SSH helpers for QMP screendump, qmrestore/pct restore fallback, and key generation.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-12
-Version: 1.3.0
+Modified: 2026-07-13
+Version: 1.4.0
 """
 
 from __future__ import annotations
@@ -199,6 +199,30 @@ class SSHSession:
             )
         return combined.strip()
 
+    def pct_restore(
+        self,
+        archive: str,
+        vmid: int,
+        storage: str | None = None,
+        unique: bool = True,
+        timeout: int = 7200,
+    ) -> str:
+        """
+        Restore an LXC backup as root via SSH.
+
+        API tokens cannot restore CT bind/device mounts
+        ('restoring mpN to bind mount is only possible for root').
+        """
+        cmd = self.format_pct_restore_cmd(archive, vmid, storage=storage, unique=unique)
+        code, out, err = self.run(cmd, timeout=timeout)
+        combined = (out or "") + (err or "")
+        if code != 0:
+            raise RuntimeError(
+                f"pct restore via SSH failed (exit {code}). "
+                f"Command: {cmd}\n{combined[-2000:]}"
+            )
+        return combined.strip()
+
     def qm_delete_keys(self, vmid: int, keys: list[str]) -> list[str]:
         """Delete config keys from a QEMU guest (e.g. usb0, hostpci0, net0)."""
         if not keys:
@@ -210,6 +234,19 @@ class SSHSession:
         )
         if code != 0:
             raise RuntimeError(f"qm set --delete failed: {err or out}")
+        return list(keys)
+
+    def pct_delete_keys(self, vmid: int, keys: list[str]) -> list[str]:
+        """Delete config keys from an LXC guest (e.g. net0, mp0 bind mounts)."""
+        if not keys:
+            return []
+        delete_arg = ",".join(sorted(keys))
+        code, out, err = self.run(
+            f"pct set {int(vmid)} --delete {shlex.quote(delete_arg)}",
+            timeout=120,
+        )
+        if code != 0:
+            raise RuntimeError(f"pct set --delete failed: {err or out}")
         return list(keys)
 
     def fetch_file(self, remote_path: str, local_path: str) -> None:

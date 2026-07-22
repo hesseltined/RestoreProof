@@ -2,8 +2,8 @@
 Purpose: Full restore → boot → evidence → cleanup cycle for one guest.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-12
-Version: 1.8.0
+Modified: 2026-07-13
+Version: 1.9.0
 """
 
 from __future__ import annotations
@@ -31,6 +31,8 @@ from app.services.proxmox import (
     ProxmoxAPIError,
     ProxmoxClient,
     is_hostdev_privilege_error,
+    is_lxc_mount_privilege_error,
+    lxc_host_mount_keys,
     qemu_hostdev_keys,
 )
 from app.services.ssh_keys import SSHSession, convert_screendump_to_png
@@ -156,6 +158,8 @@ def should_try_older_backup(exc: BaseException) -> bool:
     """Whether a failed restore of one snapshot should fall through to an older backup."""
     if is_hostdev_privilege_error(exc):
         return False
+    if is_lxc_mount_privilege_error(exc):
+        return False
     msg = str(exc).lower()
     if "ssh is required" in msg:
         return False
@@ -214,6 +218,7 @@ def build_env_diagnostics(
     used_fallback: bool,
     restore_method: str,
     source_hostdevs: list[str],
+    source_bind_mounts: list[str],
     ssh_ready: bool,
     failed_newer: list[tuple[str, str]],
     manual_cmd: str = "",
@@ -278,6 +283,8 @@ def build_env_diagnostics(
     lines.append(f"  SSH configured: {'yes' if ssh_ready else 'no'}")
     if source_hostdevs:
         lines.append(f"  Source host passthrough: {', '.join(source_hostdevs)}")
+    if source_bind_mounts:
+        lines.append(f"  Source CT bind/device mounts: {', '.join(source_bind_mounts)}")
     if manual_cmd:
         lines.append("")
         lines.append(f"Manual retry on node {node} as root:")
@@ -577,13 +584,24 @@ def execute_restore_run(db: Session, run_id: int) -> None:
 
         ssh_ready = bool(host.ssh_host and host.ssh_private_key_path)
         source_hostdevs: list[str] = []
+        source_bind_mounts: list[str] = []
         source_cfg: dict = {}
-        if guest_type == "qemu":
-            try:
+        try:
+            if guest_type == "qemu":
                 source_cfg = client.qemu_config(node, guest.vmid)
                 source_hostdevs = qemu_hostdev_keys(source_cfg)
-            except Exception as exc:  # noqa: BLE001
-                _log(run, f"Could not inspect source config for host devices: {exc}")
+            else:
+                source_cfg = client.lxc_config(node, guest.vmid)
+                source_bind_mounts = lxc_host_mount_keys(source_cfg)
+        except Exception as exc:  # noqa: BLE001
+            _log(run, f"Could not inspect source config for host devices/mounts: {exc}")
+
+        if source_bind_mounts:
+            _log(
+                run,
+                f"Source CT has host bind/device mounts ({', '.join(source_bind_mounts)}); "
+                "API tokens cannot restore those — will use SSH pct restore when available",
+            )
 
         storage_hint = storage_hint_from_guest_config(source_cfg, guest_type) if source_cfg else None
         storage = pick_restore_storage(
@@ -608,7 +626,8 @@ def execute_restore_run(db: Session, run_id: int) -> None:
             if not ssh_ready:
                 raise RuntimeError(
                     "SSH is required to restore guests with host USB/PCI passthrough "
-                    "(API tokens cannot apply those devices). Configure SSH on the host."
+                    "or CT bind/device mounts (API tokens cannot apply those). "
+                    "Configure SSH on the host."
                 )
             return SSHSession(
                 host.ssh_host, host.ssh_port, host.ssh_user, host.ssh_private_key_path
@@ -669,6 +688,23 @@ def execute_restore_run(db: Session, run_id: int) -> None:
             if out:
                 tail = out[-500:] if len(out) > 500 else out
                 _log(run, f"SSH qmrestore finished: {tail}")
+
+        def _restore_lxc_via_ssh(archive_vol: str, reason: str) -> None:
+            _log(run, reason)
+            _log_manual_cmd(archive_vol, via="SSH pct restore")
+            _set_progress(
+                db,
+                run,
+                pct=12.0,
+                label="Restoring via SSH (CT bind mounts)…",
+                node=node,
+            )
+            db.commit()
+            with _open_ssh() as ssh:
+                out = ssh.pct_restore(str(archive_vol), int(test_vmid), storage=storage, unique=True)
+            if out:
+                tail = out[-500:] if len(out) > 500 else out
+                _log(run, f"SSH pct restore finished: {tail}")
 
         def _restore_via_api(archive_vol: str) -> None:
             nonlocal last_logged_pct, last_heartbeat_log
@@ -738,6 +774,13 @@ def execute_restore_run(db: Session, run_id: int) -> None:
                 "API tokens cannot restore those configs. Install the RestoreProof SSH key "
                 "on the Proxmox host and Test SSH, then retry — or exclude this guest."
             )
+        if guest_type != "qemu" and source_bind_mounts and not ssh_ready:
+            raise RuntimeError(
+                f"Source CT has host bind/device mounts ({', '.join(source_bind_mounts)}). "
+                "API tokens cannot restore bind mounts (Proxmox root-only restriction). "
+                "Install the RestoreProof SSH key on the Proxmox host and Test SSH, "
+                "then retry — or exclude this guest."
+            )
 
         last_logged_pct: Optional[float] = None
         last_heartbeat_log = 0.0
@@ -791,6 +834,13 @@ def execute_restore_run(db: Session, run_id: int) -> None:
                         f"Source has host passthrough ({', '.join(source_hostdevs)}); "
                         "restoring via SSH as root so API token USB restrictions are avoided",
                     )
+                elif guest_type != "qemu" and source_bind_mounts and ssh_ready:
+                    restore_method = "SSH pct restore (CT bind/device mounts)"
+                    _restore_lxc_via_ssh(
+                        archive,
+                        f"Source has bind/device mounts ({', '.join(source_bind_mounts)}); "
+                        "restoring via SSH as root (API tokens cannot restore bind mounts)",
+                    )
                 else:
                     try:
                         restore_method = "API"
@@ -808,6 +858,23 @@ def execute_restore_run(db: Session, run_id: int) -> None:
                             raise RuntimeError(
                                 f"{api_exc} — API tokens cannot restore guests with host USB/PCI "
                                 "passthrough. Configure SSH on this host (or exclude the guest)."
+                            ) from api_exc
+                        elif (
+                            guest_type != "qemu"
+                            and is_lxc_mount_privilege_error(api_exc)
+                            and ssh_ready
+                        ):
+                            _cleanup_partial()
+                            restore_method = "SSH pct restore (API bind-mount fallback)"
+                            _restore_lxc_via_ssh(
+                                archive,
+                                f"API restore blocked by CT bind/device mount ({api_exc}); "
+                                "retrying via SSH as root",
+                            )
+                        elif guest_type != "qemu" and is_lxc_mount_privilege_error(api_exc):
+                            raise RuntimeError(
+                                f"{api_exc} — API tokens cannot restore CTs with host bind/device "
+                                "mounts. Configure SSH on this host (or exclude the guest)."
                             ) from api_exc
                         else:
                             raise
@@ -870,6 +937,7 @@ def execute_restore_run(db: Session, run_id: int) -> None:
                     used_fallback=attempt_num > 1,
                     restore_method=restore_method,
                     source_hostdevs=source_hostdevs,
+                    source_bind_mounts=source_bind_mounts,
                     ssh_ready=ssh_ready,
                     failed_newer=failed_newer,
                     manual_cmd=_manual_restore_cmd(archive),
@@ -896,6 +964,7 @@ def execute_restore_run(db: Session, run_id: int) -> None:
                 used_fallback=bool(run.used_fallback_backup),
                 restore_method=restore_method,
                 source_hostdevs=source_hostdevs,
+                source_bind_mounts=source_bind_mounts,
                 ssh_ready=ssh_ready,
                 failed_newer=failed_newer,
                 manual_cmd=_manual_restore_cmd(str(run.backup_volid or latest_volid)),
@@ -930,6 +999,7 @@ def execute_restore_run(db: Session, run_id: int) -> None:
             used_fallback=bool(run.used_fallback_backup),
             restore_method=restore_method,
             source_hostdevs=source_hostdevs,
+            source_bind_mounts=source_bind_mounts,
             ssh_ready=ssh_ready,
             failed_newer=failed_newer,
             manual_cmd="",
@@ -944,7 +1014,7 @@ def execute_restore_run(db: Session, run_id: int) -> None:
             _log(run, "—— Restore diagnostics ——\n" + run.result_summary)
         db.commit()
 
-        # Detach NICs (and host USB/PCI) before start — test guests must stay isolated
+        # Detach NICs (and host USB/PCI / CT bind mounts) before start — test guests stay isolated
         if guest_type == "qemu":
             deleted: list[str] = []
             try:
@@ -963,15 +1033,38 @@ def execute_restore_run(db: Session, run_id: int) -> None:
                     raise
         else:
             deleted = client.lxc_unlink_nets(node, test_vmid)
+            cfg_pre = client.lxc_config(node, test_vmid)
+            bind_keys = lxc_host_mount_keys(cfg_pre)
+            if bind_keys:
+                # Tokens usually cannot delete bind mounts either — prefer SSH as root.
+                if ssh_ready:
+                    _log(
+                        run,
+                        f"Removing restored bind/device mounts from test CT "
+                        f"({', '.join(bind_keys)}) so drills do not remount host paths",
+                    )
+                    with _open_ssh() as ssh:
+                        deleted += ssh.pct_delete_keys(int(test_vmid), bind_keys)
+                else:
+                    try:
+                        client.lxc_set_config(node, test_vmid, delete=",".join(sorted(bind_keys)))
+                        deleted += bind_keys
+                    except ProxmoxAPIError as unlink_exc:
+                        raise RuntimeError(
+                            f"Could not detach CT bind mounts {bind_keys}: {unlink_exc}. "
+                            "Configure SSH so RestoreProof can remove them as root."
+                        ) from unlink_exc
         _set_progress(db, run, pct=86.0, label="Detached NICs — starting guest")
-        _log(run, f"Detached NICs/hostdevs: {deleted or 'none'}")
+        _log(run, f"Detached NICs/hostdevs/mounts: {deleted or 'none'}")
         cfg = (
             client.qemu_config(node, test_vmid)
             if guest_type == "qemu"
             else client.lxc_config(node, test_vmid)
         )
         leftover_nets = [k for k in cfg.keys() if str(k).startswith("net")]
-        leftover_host = qemu_hostdev_keys(cfg) if guest_type == "qemu" else []
+        leftover_host = (
+            qemu_hostdev_keys(cfg) if guest_type == "qemu" else lxc_host_mount_keys(cfg)
+        )
         if leftover_nets or leftover_host:
             raise RuntimeError(
                 f"Detach incomplete; still present: {leftover_nets + leftover_host}"
@@ -1054,6 +1147,12 @@ def execute_restore_run(db: Session, run_id: int) -> None:
             msg = (
                 f"{msg} — API tokens cannot restore guests that pass through host USB/PCI devices. "
                 "Exclude this guest, or remove those host devices from the source before the next backup."
+            )
+        elif is_lxc_mount_privilege_error(exc):
+            msg = (
+                f"{msg} — API tokens cannot restore CTs with host bind/device mounts. "
+                "Install the RestoreProof SSH key on the Proxmox host, run Test SSH, and retry "
+                "(or exclude this guest)."
             )
         elif is_pbs_data_error(exc) and "PBS backup data error" not in msg:
             msg = (

@@ -1,8 +1,8 @@
 # Purpose: RestoreProof — automated Proxmox PBS restore drills
 # Author: Doug Hesseltine
 # Created: 2026-07-12
-# Modified: 2026-07-12
-# Version: 1.2.0
+# Modified: 2026-07-22
+# Version: 1.3.0
 
 # RestoreProof
 
@@ -15,6 +15,8 @@ RestoreProof runs non-destructive restore drills against [Proxmox Backup Server]
 3. Power on → wait → capture console evidence
 4. Clean up the test guest
 5. Email success/failure and show proof in the UI
+
+**Public demo (no login):** [https://restoreproof.technologist.services/demo](https://restoreproof.technologist.services/demo) — same menus as production, sample data only.
 
 ## Deploy options
 
@@ -56,7 +58,7 @@ Open **http://localhost:3080** — create the first admin, then add a host and r
 | `db` | PostgreSQL |
 
 - **Proxmox API token** = primary automation
-- **SSH key** = VM console `screendump` only
+- **SSH key** = VM screenshots, plus root fallback for USB/PCI VMs and CTs with bind mounts
 - **One restore at a time** (global lock)
 - Progress on the Dashboard while a restore is running (Proxmox often omits a % during disk transfer)
 

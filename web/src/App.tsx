@@ -2,8 +2,8 @@
  * Purpose: RestoreProof React router entry.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-12
- * Version: 1.1.1
+ * Modified: 2026-07-22
+ * Version: 1.3.0
  */
 
 import { Navigate, Route, Routes } from "react-router-dom";
@@ -24,18 +24,25 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { UsersPage } from "./pages/UsersPage";
 
 function Private({ children }: { children: React.ReactNode }) {
-  const { user, loading, setupRequired } = useAuth();
+  const { user, loading, setupRequired, demo } = useAuth();
+  if (demo) return <>{children}</>;
   if (loading) return <p className="help" style={{ padding: "2rem" }}>Loading…</p>;
   if (setupRequired || !user) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
 
 export default function App() {
+  const { demo } = useAuth();
+
   return (
     <Routes>
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-      <Route path="/reset-password" element={<ResetPasswordPage />} />
+      {!demo && (
+        <>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
+        </>
+      )}
       <Route
         path="/"
         element={

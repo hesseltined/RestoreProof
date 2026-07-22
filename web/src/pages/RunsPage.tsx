@@ -2,17 +2,18 @@
  * Purpose: Restore run history and evidence viewer.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-12
- * Version: 1.1.0
+ * Modified: 2026-07-22
+ * Version: 1.3.0
  */
 
-import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useCallback, useEffect, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { AuthenticatedImage } from "../components/AuthenticatedImage";
 
 type Run = {
   id: number;
+  guest_id?: number | null;
   source_name: string;
   source_vmid: number;
   test_vmid: number | null;
@@ -33,7 +34,18 @@ type Run = {
   finished_at: string | null;
   created_at: string;
   log_text?: string;
+  remediated?: boolean;
+  remediated_by_run_id?: number | null;
 };
+
+type RunPage = {
+  items: Run[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+const PAGE_SIZES = [10, 20, 50, 100] as const;
 
 function statusBadgeClass(status: string, usedFallback?: boolean): string {
   if (status === "failed") return "fail";
@@ -49,19 +61,92 @@ function statusLabel(status: string, usedFallback?: boolean): string {
 
 export function RunsPage() {
   const [runs, setRuns] = useState<Run[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
   const [error, setError] = useState("");
+  const [retryBusyId, setRetryBusyId] = useState<number | null>(null);
+  const navigate = useNavigate();
+
+  const load = useCallback(async () => {
+    const data = await api<RunPage>(`/runs?page=${page}&page_size=${pageSize}`);
+    setRuns(data.items);
+    setTotal(data.total);
+  }, [page, pageSize]);
 
   useEffect(() => {
-    api<Run[]>("/runs")
-      .then(setRuns)
-      .catch((e) => setError(e.message));
-  }, []);
+    load().catch((e) => setError(e.message));
+  }, [load]);
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const from = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const to = Math.min(total, page * pageSize);
+
+  async function retry(runId: number) {
+    setError("");
+    setRetryBusyId(runId);
+    try {
+      const created = await api<Run>(`/runs/${runId}/retry`, { method: "POST" });
+      navigate(`/runs/${created.id}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Retry failed");
+      setRetryBusyId(null);
+    }
+  }
+
+  function changePageSize(next: number) {
+    setPageSize(next);
+    setPage(1);
+  }
 
   return (
     <div>
       <h1 className="page-title">Runs</h1>
       <p className="page-sub">History of restore drills with console evidence.</p>
       {error && <p className="error">{error}</p>}
+
+      <div className="pager-bar">
+        <label className="pager-size">
+          Show
+          <select
+            value={pageSize}
+            onChange={(e) => changePageSize(Number(e.target.value))}
+            aria-label="Items per page"
+          >
+            {PAGE_SIZES.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+          per page
+        </label>
+        <div className="pager-meta help">
+          {total === 0 ? "No runs" : `${from}–${to} of ${total}`}
+        </div>
+        <div className="pager-nav">
+          <button
+            className="btn secondary small"
+            type="button"
+            disabled={page <= 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+          >
+            ← Prev
+          </button>
+          <span className="pager-page mono">
+            {page} / {totalPages}
+          </span>
+          <button
+            className="btn secondary small"
+            type="button"
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          >
+            Next →
+          </button>
+        </div>
+      </div>
+
       <div className="card table-wrap">
         <table className="data">
           <thead>
@@ -73,6 +158,7 @@ export function RunsPage() {
               <th>Backup</th>
               <th>Trigger</th>
               <th>Created</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -86,8 +172,32 @@ export function RunsPage() {
                 </td>
                 <td className="mono">{r.test_vmid ?? "—"}</td>
                 <td>
-                  <span className={`badge ${statusBadgeClass(r.status, r.used_fallback_backup)}`}>
-                    {statusLabel(r.status, r.used_fallback_backup)}
+                  <span className="run-status-cell">
+                    <span className={`badge ${statusBadgeClass(r.status, r.used_fallback_backup)}`}>
+                      {statusLabel(r.status, r.used_fallback_backup)}
+                    </span>
+                    {r.status === "failed" && r.remediated && (
+                      <Link
+                        to={
+                          r.remediated_by_run_id
+                            ? `/runs/${r.remediated_by_run_id}`
+                            : `/runs/${r.id}`
+                        }
+                        className="remediated-mark"
+                        title={
+                          r.remediated_by_run_id
+                            ? `Remediated — this guest passed on run #${r.remediated_by_run_id}`
+                            : "Remediated — later restore succeeded"
+                        }
+                        aria-label={
+                          r.remediated_by_run_id
+                            ? `Remediated by run ${r.remediated_by_run_id}`
+                            : "Remediated"
+                        }
+                      >
+                        <span aria-hidden>↑</span>
+                      </Link>
+                    )}
                   </span>
                 </td>
                 <td className="help">
@@ -102,11 +212,61 @@ export function RunsPage() {
                 </td>
                 <td>{r.trigger}</td>
                 <td>{new Date(r.created_at).toLocaleString()}</td>
+                <td className="row-actions">
+                  {r.status === "failed" && !r.remediated && (
+                    <button
+                      className="btn small"
+                      type="button"
+                      disabled={retryBusyId === r.id || !r.guest_id}
+                      title={
+                        r.guest_id
+                          ? "Queue another restore drill for this guest"
+                          : "Guest no longer in inventory"
+                      }
+                      onClick={() => retry(r.id)}
+                    >
+                      {retryBusyId === r.id ? "Retrying…" : "Retry"}
+                    </button>
+                  )}
+                </td>
               </tr>
             ))}
+            {!runs.length && (
+              <tr>
+                <td colSpan={8} className="help">
+                  No restore runs yet.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
+
+      {totalPages > 1 && (
+        <div className="pager-bar pager-bar--bottom">
+          <div className="pager-nav">
+            <button
+              className="btn secondary small"
+              type="button"
+              disabled={page <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+            >
+              ← Prev
+            </button>
+            <span className="pager-page mono">
+              {page} / {totalPages}
+            </span>
+            <button
+              className="btn secondary small"
+              type="button"
+              disabled={page >= totalPages}
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            >
+              Next →
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -116,6 +276,8 @@ export function RunDetailPage() {
   const [run, setRun] = useState<Run | null>(null);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
+  const [retryBusy, setRetryBusy] = useState(false);
+  const navigate = useNavigate();
 
   useEffect(() => {
     api<Run>(`/runs/${id}`)
@@ -129,6 +291,20 @@ export function RunDetailPage() {
       setMsg("Email resent (if SMTP + recipients configured).");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Resend failed");
+    }
+  }
+
+  async function retry() {
+    if (!run) return;
+    setRetryBusy(true);
+    setError("");
+    try {
+      const created = await api<Run>(`/runs/${run.id}/retry`, { method: "POST" });
+      navigate(`/runs/${created.id}`);
+      // Worker will pick up the queued run; dashboard also shows active progress.
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Retry failed");
+      setRetryBusy(false);
     }
   }
 
@@ -193,9 +369,26 @@ export function RunDetailPage() {
             <p className="help mono">Latest available: {run.latest_backup_volid}</p>
           )}
           {run.error_message && <p className="error">{run.error_message}</p>}
-          <button className="btn secondary small" type="button" onClick={resend}>
-            Resend email
-          </button>
+          <div className="run-detail-actions">
+            {run.status === "failed" && (
+              <button
+                className="btn small"
+                type="button"
+                disabled={retryBusy || !run.guest_id}
+                title={
+                  run.guest_id
+                    ? "Queue another restore drill for this guest"
+                    : "Guest no longer in inventory"
+                }
+                onClick={retry}
+              >
+                {retryBusy ? "Retrying…" : "Retry restore"}
+              </button>
+            )}
+            <button className="btn secondary small" type="button" onClick={resend}>
+              Resend email
+            </button>
+          </div>
         </div>
         <div className="card">
           <h3 style={{ marginTop: 0 }}>Evidence</h3>

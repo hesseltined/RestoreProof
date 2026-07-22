@@ -1,7 +1,8 @@
 # Purpose: RestoreProof web UI container (nginx + static build)
 # Author: Doug Hesseltine
 # Created: 2026-07-12
-# Version: 1.0.0
+# Modified: 2026-07-22
+# Version: 1.3.0
 
 FROM node:22-alpine AS build
 WORKDIR /app

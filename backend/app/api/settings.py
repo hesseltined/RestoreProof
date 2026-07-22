@@ -2,8 +2,8 @@
 Purpose: App settings, SMTP, dashboard, users list, setup progress endpoints.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-13
-Version: 1.3.0
+Modified: 2026-07-22
+Version: 1.5.0
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
+from app.api.guests import _guest_out
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import Guest, ProxmoxHost, RestoreRun, User
@@ -22,7 +23,8 @@ from app.schemas import (
     AppSettingsOut,
     AppSettingsUpdate,
     DashboardOut,
-    GuestOut,
+    PurgeRunsOut,
+    PurgeRunsRequest,
     RunOut,
     SchedulePlanOut,
     SetupProgressOut,
@@ -37,6 +39,8 @@ from app.services import locks
 from app.services.bootstrap import get_app_settings, get_smtp_settings
 from app.services.email_templates import apply_default_templates
 from app.services.mailer import apply_preset_defaults, send_email
+from app.services.remediation import remediation_for_runs, run_out_with_remediation
+from app.services.retention import purge_runs_before
 from app.services.scheduler import build_schedule_plan, pick_next_guest, refresh_guest_due_times
 from app.services.smtp_presets import list_presets
 
@@ -121,6 +125,26 @@ def reset_email_templates(
     apply_default_templates(settings)
     db.commit()
     return settings
+
+
+@router.post("/settings/purge-runs", response_model=PurgeRunsOut)
+def purge_runs(
+    body: PurgeRunsRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> PurgeRunsOut:
+    """Admin: delete restore run history (and evidence files) older than a cutoff."""
+    before = body.before
+    if before.tzinfo is None:
+        before = before.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    if before >= now:
+        raise HTTPException(
+            status_code=400,
+            detail="Cutoff must be in the past — refuse to purge current/future runs",
+        )
+    deleted = purge_runs_before(db, before)
+    return PurgeRunsOut(deleted=deleted, before=before)
 
 
 @router.get("/schedule/plan", response_model=SchedulePlanOut)
@@ -332,6 +356,7 @@ def dashboard(db: Session = Depends(get_db), _: User = Depends(get_current_user)
     recent = (
         db.query(RestoreRun).order_by(RestoreRun.created_at.desc()).limit(10).all()
     )
+    remediated_by = remediation_for_runs(db, recent)
     active = (
         db.query(RestoreRun)
         .filter(RestoreRun.status.in_(("queued", "running")))
@@ -360,24 +385,13 @@ def dashboard(db: Session = Depends(get_db), _: User = Depends(get_current_user)
     next_out = None
     if next_guest:
         host = db.query(ProxmoxHost).filter_by(id=next_guest.host_id).first()
-        next_out = GuestOut(
-            id=next_guest.id,
-            host_id=next_guest.host_id,
-            host_name=host.name if host else "",
-            vmid=next_guest.vmid,
-            name=next_guest.name,
-            guest_type=next_guest.guest_type,
-            node=next_guest.node,
-            status=next_guest.status,
-            cpu_cores=next_guest.cpu_cores,
-            memory_bytes=next_guest.memory_bytes,
-            disk_bytes=next_guest.disk_bytes,
-            excluded=next_guest.excluded,
-            schedule_cron=next_guest.schedule_cron,
-            schedule_enabled=next_guest.schedule_enabled,
-            last_tested_at=next_guest.last_tested_at,
-            next_due_at=next_guest.next_due_at,
+        latest = (
+            db.query(RestoreRun)
+            .filter(RestoreRun.guest_id == next_guest.id)
+            .order_by(RestoreRun.id.desc())
+            .first()
         )
+        next_out = _guest_out(next_guest, host.name if host else "", latest)
     return DashboardOut(
         setup_completed=settings.setup_completed,
         schedule_enabled=settings.schedule_enabled,
@@ -385,7 +399,7 @@ def dashboard(db: Session = Depends(get_db), _: User = Depends(get_current_user)
         lock_held=bool(lock.held_by),
         lock_held_by=lock.held_by,
         lock_run_id=lock.run_id,
-        recent_runs=[RunOut.model_validate(r) for r in recent],
+        recent_runs=[run_out_with_remediation(r, remediated_by) for r in recent],
         guest_count=db.query(Guest).count(),
         excluded_count=db.query(Guest).filter(Guest.excluded.is_(True)).count(),
         host_count=db.query(ProxmoxHost).count(),

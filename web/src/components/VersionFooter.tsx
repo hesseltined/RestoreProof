@@ -2,14 +2,16 @@
  * Purpose: Small-print RestoreProof version (UI + API health when reachable).
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-12
- * Version: 1.1.1
+ * Modified: 2026-07-22
+ * Version: 1.3.0
  *
  * TODO: Remove VersionFooter from login/layout when troubleshooting is done
  *       (keep /api/health version only if desired).
  */
 
 import { useEffect, useState } from "react";
+import { isDemoMode } from "../demo/mode";
+import { demoApiFetch } from "../demo/mockApi";
 import { APP_VERSION } from "../version";
 
 type ApiHealth = {
@@ -25,11 +27,17 @@ export function VersionFooter({ variant = "app" }: { variant?: Variant }) {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/health")
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return (await res.json()) as ApiHealth;
-      })
+    const load = isDemoMode()
+      ? demoApiFetch("/health").then(async (res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return (await res.json()) as ApiHealth;
+        })
+      : fetch("/api/health").then(async (res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return (await res.json()) as ApiHealth;
+        });
+
+    load
       .then((data) => {
         if (cancelled) return;
         setApiOk(true);
@@ -63,6 +71,14 @@ export function VersionFooter({ variant = "app" }: { variant?: Variant }) {
         ·
       </span>
       <span className={apiOk === false ? "version-footer-warn" : undefined}>{apiLabel}</span>
+      {isDemoMode() && (
+        <>
+          <span className="version-footer-sep" aria-hidden="true">
+            ·
+          </span>
+          <span>demo</span>
+        </>
+      )}
     </p>
   );
 }

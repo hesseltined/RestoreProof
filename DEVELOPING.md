@@ -2,7 +2,7 @@
 # Author: Doug Hesseltine
 # Created: 2026-07-12
 # Modified: 2026-07-12
-# Version: 1.2.0
+# Version: 1.3.2
 
 # Developing RestoreProof
 
@@ -50,13 +50,13 @@ API/worker refuse to start if `SECRET_KEY` is empty/placeholder or the DB passwo
 `./scripts/push-images.sh` only **builds and pushes** Hub tags. It does **not** run `docker compose up`, so your local stack keeps running.
 
 ```bash
-VERSION=1.2.0 ./scripts/push-images.sh
+VERSION=1.3.2 ./scripts/push-images.sh
 ```
 
 | Image | Tags |
 |-------|------|
-| `yesitsmedoug/restoreproof-api` | `latest`, `1.2.0`, … (API + worker) |
-| `yesitsmedoug/restoreproof-web` | `latest`, `1.2.0`, … |
+| `yesitsmedoug/restoreproof-api` | `latest`, `1.3.2`, … (API + worker) |
+| `yesitsmedoug/restoreproof-web` | `latest`, `1.3.2`, … |
 
 Consumers use [`portainer-stack.yml`](portainer-stack.yml) / [PORTAINER.md](PORTAINER.md).
 

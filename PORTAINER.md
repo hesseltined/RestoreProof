@@ -2,7 +2,7 @@
 # Author: Doug Hesseltine
 # Created: 2026-07-12
 # Modified: 2026-07-12
-# Version: 1.3.0
+# Version: 1.3.2
 
 # Deploy with Portainer
 
@@ -80,7 +80,7 @@ Settings → **Export / Import configuration** moves hosts, SMTP, schedules, and
 
 Edit stack → **Pull and redeploy** (`latest` tag).
 
-To pin a version: `yesitsmedoug/restoreproof-api:1.3.1` and `yesitsmedoug/restoreproof-web:1.3.1`.
+To pin a version: `yesitsmedoug/restoreproof-api:1.3.2` and `yesitsmedoug/restoreproof-web:1.3.2`.
 
 Volumes `rp_pgdata` / `rp_data` / `rp_ssh` keep DB, evidence, and SSH keys.
 

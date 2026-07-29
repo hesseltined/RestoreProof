@@ -2,8 +2,8 @@
 Purpose: Full restore → boot → evidence → cleanup cycle for one guest.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-13
-Version: 1.9.0
+Modified: 2026-07-28
+Version: 1.11.0
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ from app.services.proxmox import (
     ProxmoxClient,
     is_hostdev_privilege_error,
     is_lxc_mount_privilege_error,
+    is_successful_task_exit,
     lxc_host_mount_keys,
     qemu_hostdev_keys,
 )
@@ -471,6 +472,43 @@ def sync_host_guests(db: Session, host: ProxmoxHost) -> int:
     host.last_error = None
     db.commit()
     return count
+
+
+def sync_enabled_hosts_for_schedule(db: Session, window_start: datetime) -> int:
+    """Refresh Proxmox inventory once per schedule window before guest selection.
+
+    Deletes DB guests that no longer exist on the host so the scheduler cannot
+    pick removed VMs/CTs. Hosts already synced at or after ``window_start`` are
+    skipped. Returns the number of hosts successfully synced this call.
+    """
+    hosts = (
+        db.query(ProxmoxHost)
+        .filter(ProxmoxHost.enabled.is_(True))
+        .order_by(ProxmoxHost.id.asc())
+        .all()
+    )
+    synced = 0
+    for host in hosts:
+        if host.last_sync_at and host.last_sync_at >= window_start:
+            continue
+        try:
+            count = sync_host_guests(db, host)
+            synced += 1
+            logger.info(
+                "Schedule pre-sync host %s (%s): %s guests",
+                host.name,
+                host.id,
+                count,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "Schedule pre-sync failed for host %s (%s)",
+                host.name,
+                host.id,
+            )
+            host.last_error = f"Schedule pre-sync failed: {exc}"
+            db.commit()
+    return synced
 
 
 async def notify_run(db: Session, run: RestoreRun) -> None:
@@ -1075,9 +1113,28 @@ def execute_restore_run(db: Session, run_id: int) -> None:
             upid = client.qemu_start(node, test_vmid)
         else:
             upid = client.lxc_start(node, test_vmid)
-        client.wait_task(node, upid, timeout=300)
+        start_status = client.wait_task(node, upid, timeout=300)
+        start_exit = str(start_status.get("exitstatus") or "OK")
+        if is_successful_task_exit(start_exit) and start_exit.upper().startswith("WARNING"):
+            warn_bits: list[str] = []
+            try:
+                for entry in client.task_log(node, str(upid), start=0, limit=80):
+                    text = str(entry.get("t") or entry.get("text") or "").strip()
+                    if text.upper().startswith("WARN"):
+                        warn_bits.append(text)
+            except Exception:  # noqa: BLE001
+                pass
+            detail = " ".join(warn_bits) if warn_bits else start_exit
+            if len(detail) > 400:
+                detail = detail[:397] + "…"
+            _log(
+                run,
+                f"Guest started with Proxmox warning(s) ({start_exit}) — "
+                f"treating as success. {detail}",
+            )
+        else:
+            _log(run, "Guest started")
         _set_progress(db, run, pct=90.0, label="Guest started — waiting for boot")
-        _log(run, "Guest started")
         db.commit()
 
         app_settings = get_app_settings(db)

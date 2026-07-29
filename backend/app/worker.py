@@ -2,8 +2,8 @@
 Purpose: Background worker — process queued restores, schedule rotation, retention.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-12
-Version: 1.4.0
+Modified: 2026-07-28
+Version: 1.5.0
 """
 
 from __future__ import annotations
@@ -16,9 +16,18 @@ from app.config import get_settings
 from app.database import Base, SessionLocal, engine, ensure_schema
 from app.models import RestoreRun
 from app.services.bootstrap import ensure_defaults, get_app_settings
-from app.services.restore import execute_restore_run, recover_orphaned_runs
+from app.services.restore import (
+    execute_restore_run,
+    recover_orphaned_runs,
+    sync_enabled_hosts_for_schedule,
+)
 from app.services.retention import apply_retention
-from app.services.scheduler import pick_next_guest, refresh_guest_due_times
+from app.services.scheduler import (
+    compute_next_due,
+    pick_next_guest,
+    refresh_guest_due_times,
+    schedule_window_start,
+)
 from app.services.secrets_guard import validate_runtime_secrets
 
 logging.basicConfig(
@@ -67,6 +76,12 @@ def maybe_enqueue_scheduled() -> None:
         )
         if busy:
             return
+        # Refresh host→guest inventory once per schedule window so deleted
+        # Proxmox guests are pruned before backup selection.
+        window_start = schedule_window_start(settings.global_cron)
+        synced = sync_enabled_hosts_for_schedule(db, window_start)
+        if synced:
+            refresh_guest_due_times(db)
         guest = pick_next_guest(db)
         if not guest:
             return
@@ -83,8 +98,6 @@ def maybe_enqueue_scheduled() -> None:
             created_at=datetime.now(timezone.utc),
         )
         db.add(run)
-        from app.services.scheduler import compute_next_due
-
         guest.next_due_at = compute_next_due(
             guest, settings.global_cron, datetime.now(timezone.utc)
         )

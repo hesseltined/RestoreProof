@@ -1,0 +1,31 @@
+---
+description: RestoreProof Docker images must ship linux/amd64 for VM pull/test
+alwaysApply: true
+---
+
+# Docker images — always AMD64 for live VM tests
+
+RestoreProof runs on an **amd64** Docker host (`ssh docker` → `10.250.0.226` / Portainer). Mac builds default to arm64 and **cannot** be pulled on that VM (`no matching manifest for linux/amd64`).
+
+## When shipping (commit → Hub → VM test)
+
+1. Build and push with **`linux/amd64`** — use `./scripts/push-images.sh` (defaults to `PLATFORM=linux/amd64` via `docker buildx build --platform … --push`).
+2. Tag both **`VERSION`** and **`latest`** for `yesitsmedoug/restoreproof-api` and `yesitsmedoug/restoreproof-web`.
+3. Do **not** push a plain `docker build` from Apple Silicon without `--platform linux/amd64`.
+4. After push, the stack on the VM must be pullable immediately for live tests (redeploy via compose/Portainer on that host).
+
+## Local testing
+
+- Local arm64 smoke builds are fine if useful.
+- Hub images for Doug’s live VM test must still be **amd64-ready** every time you publish.
+
+## Wrong vs right
+
+```bash
+# ❌ BAD — Mac-native push (arm64-only; VM pull fails)
+docker build -t yesitsmedoug/restoreproof-api:latest ./backend && docker push …
+
+# ✅ GOOD
+./scripts/push-images.sh
+# or: docker buildx build --platform linux/amd64 -t … --push ./backend
+```

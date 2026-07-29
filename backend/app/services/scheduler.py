@@ -2,8 +2,8 @@
 Purpose: Schedule helpers — due times, batch windows, coverage planning.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-12
-Version: 1.1.0
+Modified: 2026-07-28
+Version: 1.2.0
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from typing import Optional
 from croniter import croniter
 from sqlalchemy.orm import Session
 
-from app.models import Guest, RestoreRun
+from app.models import Guest, ProxmoxHost, RestoreRun
 from app.services.bootstrap import get_app_settings
 
 
@@ -93,7 +93,12 @@ def suggested_batch(eligible: int, ticks: float) -> int:
 def eligible_guests(db: Session) -> list[Guest]:
     return (
         db.query(Guest)
-        .filter(Guest.excluded.is_(False), Guest.schedule_enabled.is_(True))
+        .join(ProxmoxHost, Guest.host_id == ProxmoxHost.id)
+        .filter(
+            Guest.excluded.is_(False),
+            Guest.schedule_enabled.is_(True),
+            ProxmoxHost.enabled.is_(True),
+        )
         .all()
     )
 

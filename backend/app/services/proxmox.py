@@ -2,8 +2,8 @@
 Purpose: Proxmox VE REST API client (token auth).
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-13
-Version: 1.4.0
+Modified: 2026-07-23
+Version: 1.5.0
 """
 
 from __future__ import annotations
@@ -19,6 +19,23 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _PCT_RE = re.compile(r"(\d{1,3}(?:\.\d+)?)\s*%")
+
+
+def is_successful_task_exit(exitstatus: object) -> bool:
+    """
+    True when a Proxmox task completed successfully.
+
+    Proxmox uses exitstatus \"OK\" for clean success, and strings like
+    \"WARNINGS: 1\" when the task finished with non-fatal warnings
+    (common on qmstart for Windows/OVMF guests missing ms-cert=2023k).
+    Those warnings must not be treated as restore-test failures.
+    """
+    if exitstatus is None:
+        return False
+    es = str(exitstatus).strip()
+    if es == "OK":
+        return True
+    return es.upper().startswith("WARNING")
 
 
 class ProxmoxAPIError(RuntimeError):
@@ -140,8 +157,13 @@ class ProxmoxClient:
         while time.time() < deadline:
             status = self.request("GET", f"/nodes/{node}/tasks/{quote(upid, safe='')}/status")
             if status and status.get("status") == "stopped":
-                if status.get("exitstatus") != "OK":
-                    raise ProxmoxAPIError(f"Task failed: {status.get('exitstatus')}", body=status)
+                exitstatus = status.get("exitstatus")
+                if not is_successful_task_exit(exitstatus):
+                    raise ProxmoxAPIError(f"Task failed: {exitstatus}", body=status)
+                if str(exitstatus or "").upper().startswith("WARNING"):
+                    logger.warning(
+                        "Proxmox task %s finished with warnings: %s", upid, exitstatus
+                    )
                 if on_poll:
                     try:
                         on_poll(status or {})

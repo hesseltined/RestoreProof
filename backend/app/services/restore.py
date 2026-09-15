@@ -2,8 +2,8 @@
 Purpose: Full restore → boot → evidence → cleanup cycle for one guest.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-28
-Version: 1.11.0
+Modified: 2026-09-11
+Version: 1.15.0
 """
 
 from __future__ import annotations
@@ -24,17 +24,20 @@ from app.config import get_settings
 from app.models import Guest, ProxmoxHost, RestoreRun
 from app.security import decrypt_secret
 from app.services import locks
-from app.services.bootstrap import get_app_settings
+from app.services.bootstrap import get_app_settings, get_push_settings
 from app.services.email_templates import build_notification_context, screenshot_attachment
 from app.services.mailer import parse_addr_list, send_email
+from app.services.pusher import build_run_push, send_push
 from app.services.proxmox import (
     ProxmoxAPIError,
     ProxmoxClient,
     is_hostdev_privilege_error,
     is_lxc_mount_privilege_error,
     is_successful_task_exit,
+    leftover_test_pool_guests,
     lxc_host_mount_keys,
     qemu_hostdev_keys,
+    vmid_in_backup_jobs,
 )
 from app.services.ssh_keys import SSHSession, convert_screendump_to_png
 
@@ -300,6 +303,15 @@ def build_env_diagnostics(
     return "\n".join(lines)
 
 
+def _normalize_guest_type(guest_type: str) -> str:
+    return "qemu" if guest_type == "qemu" else "lxc"
+
+
+def _retryable_cleanup_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "lock" in msg or "timeout" in msg or "protect" in msg
+
+
 def cleanup_test_guest(
     client: ProxmoxClient,
     guest_type: str,
@@ -308,9 +320,24 @@ def cleanup_test_guest(
     ssh: Optional[SSHSession] = None,
 ) -> str:
     """Stop and destroy a leftover test qemu/lxc guest. Returns a short status message."""
+    guest_type = _normalize_guest_type(guest_type)
     last_err: Optional[Exception] = None
     for attempt in range(1, 4):
         try:
+            try:
+                if client.clear_guest_protection(node, test_vmid, guest_type):
+                    logger.info("Cleared protection on test %s %s", guest_type, test_vmid)
+            except ProxmoxAPIError as exc:
+                if exc.status_code == 404:
+                    return "already gone"
+                if ssh is not None:
+                    try:
+                        ssh.clear_protection(guest_type, test_vmid)
+                    except Exception:  # noqa: BLE001
+                        pass
+                elif not _retryable_cleanup_error(exc):
+                    raise
+
             if guest_type == "qemu":
                 try:
                     st = client.qemu_status(node, test_vmid)
@@ -334,29 +361,131 @@ def cleanup_test_guest(
                 if exc.status_code == 404:
                     return "already gone"
                 raise
-            upid = client.lxc_delete(node, test_vmid, purge=True)
+            upid = client.lxc_delete(node, test_vmid, purge=True, force=True)
             client.wait_task(node, upid, timeout=600)
             return "deleted"
         except ProxmoxAPIError as exc:
             last_err = exc
-            msg = str(exc).lower()
-            if ("lock" in msg or "timeout" in msg) and ssh is not None and guest_type == "qemu":
+            if exc.status_code == 404:
+                return "already gone"
+            if ssh is not None and _retryable_cleanup_error(exc):
                 try:
-                    ssh.run(f"qm unlock {test_vmid} || true")
-                    ssh.run(f"rm -f /var/lock/qemu-server/lock-{test_vmid}.conf")
+                    ssh.unlock_guest(guest_type, test_vmid)
+                    ssh.clear_protection(guest_type, test_vmid)
                 except Exception:  # noqa: BLE001
                     pass
                 time.sleep(2 * attempt)
                 continue
-            if "lock" in msg or "timeout" in msg:
+            if _retryable_cleanup_error(exc):
                 time.sleep(3 * attempt)
                 continue
-            if exc.status_code == 404:
-                return "already gone"
+            if ssh is not None:
+                try:
+                    return ssh.destroy_guest(guest_type, test_vmid)
+                except Exception as ssh_exc:  # noqa: BLE001
+                    last_err = ssh_exc
+                    raise last_err
             raise
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            if ssh is not None:
+                try:
+                    return ssh.destroy_guest(guest_type, test_vmid)
+                except Exception as ssh_exc:  # noqa: BLE001
+                    last_err = ssh_exc
+                    raise last_err
+            raise
+    if ssh is not None:
+        try:
+            return ssh.destroy_guest(guest_type, test_vmid)
+        except Exception as ssh_exc:  # noqa: BLE001
+            last_err = ssh_exc
     if last_err:
         raise last_err
     return "failed"
+
+
+def busy_test_vmids(db: Session) -> set[int]:
+    """Test VMIDs currently allocated to a queued or running restore."""
+    busy: set[int] = set()
+    rows = (
+        db.query(RestoreRun.test_vmid)
+        .filter(
+            RestoreRun.status.in_(("queued", "running")),
+            RestoreRun.test_vmid.isnot(None),
+        )
+        .all()
+    )
+    for (vmid,) in rows:
+        try:
+            busy.add(int(vmid))
+        except (TypeError, ValueError):
+            continue
+    return busy
+
+
+def sweep_leftover_test_guests(db: Session) -> int:
+    """
+    Destroy leftover guests sitting in each host's test VMID pool.
+
+    Source backups often copy ``protection: 1``, which blocks the per-run
+    delete. This sweep unprotects and destroys anything still in the pool
+    that is not owned by a queued/running restore.
+    """
+    busy = busy_test_vmids(db)
+    destroyed = 0
+    hosts = (
+        db.query(ProxmoxHost)
+        .filter(ProxmoxHost.enabled.is_(True))
+        .order_by(ProxmoxHost.id.asc())
+        .all()
+    )
+    for host in hosts:
+        ssh = None
+        try:
+            client = _client_for_host(host)
+            if host.ssh_host and host.ssh_private_key_path:
+                try:
+                    ssh = SSHSession(
+                        host.ssh_host, host.ssh_port, host.ssh_user, host.ssh_private_key_path
+                    )
+                    ssh.__enter__()
+                except Exception:  # noqa: BLE001
+                    ssh = None
+            leftovers = leftover_test_pool_guests(
+                client.cluster_resources(resource_type="vm"),
+                host.test_vmid_start,
+                host.test_vmid_end,
+                busy,
+            )
+            for vmid, node, guest_type in leftovers:
+                try:
+                    msg = cleanup_test_guest(client, guest_type, node, vmid, ssh=ssh)
+                    logger.info(
+                        "Swept leftover test %s %s on %s: %s",
+                        guest_type,
+                        vmid,
+                        host.name,
+                        msg,
+                    )
+                    if msg != "already gone":
+                        destroyed += 1
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "Failed to sweep test VMID %s (%s) on %s",
+                        vmid,
+                        guest_type,
+                        host.name,
+                    )
+        except Exception:  # noqa: BLE001
+            logger.exception("Test-pool sweep failed for host %s", host.name)
+        finally:
+            if ssh is not None:
+                try:
+                    ssh.__exit__(None, None, None)
+                except Exception:  # noqa: BLE001
+                    pass
+    return destroyed
 
 
 def recover_orphaned_runs(db: Session) -> int:
@@ -418,10 +547,61 @@ def recover_orphaned_runs(db: Session) -> int:
     return recovered
 
 
+def _backup_job_summary(jobs: list[dict]) -> str:
+    """Short UI string: job id and schedule for covering vzdump jobs."""
+    parts: list[str] = []
+    for job in jobs[:4]:
+        jid = str(job.get("id") or "job")
+        sched = str(job.get("schedule") or "").strip()
+        enabled = job.get("enabled", 1) not in (0, False, "0", "false", "False")
+        label = f"{jid} ({sched})" if sched else jid
+        if not enabled:
+            label += " [disabled]"
+        parts.append(label)
+    if len(jobs) > 4:
+        parts.append(f"+{len(jobs) - 4} more")
+    return ", ".join(parts)
+
+
+def _skip_queued_runs_for_guest(db: Session, guest: Guest, reason: str) -> int:
+    """Skip not-yet-started runs so a vanished guest is never restored."""
+    pending = (
+        db.query(RestoreRun)
+        .filter(RestoreRun.guest_id == guest.id, RestoreRun.status == "queued")
+        .all()
+    )
+    for run in pending:
+        run.status = "skipped"
+        run.error_message = reason
+        run.progress_label = "Skipped"
+        run.progress_pct = 100.0
+        run.finished_at = datetime.now(timezone.utc)
+        _log(run, f"Run skipped: {reason}")
+    return len(pending)
+
+
 def sync_host_guests(db: Session, host: ProxmoxHost) -> int:
     client = _client_for_host(host)
     client.version()
     resources = client.cluster_resources(resource_type="vm")
+    try:
+        backup_jobs = client.list_backup_jobs()
+    except ProxmoxAPIError as exc:
+        logger.warning("Could not list backup jobs for host %s: %s", host.name, exc)
+        backup_jobs = []
+
+    backup_index: dict[str, dict[int, list[dict]]] = {}
+
+    def backups_for(node: str, vmid: int) -> list[dict]:
+        """Cached per-node PBS snapshot listing."""
+        if node not in backup_index:
+            try:
+                backup_index[node] = client.pbs_backup_index(node)
+            except ProxmoxAPIError as exc:
+                logger.warning("Could not list backups on node %s: %s", node, exc)
+                backup_index[node] = {}
+        return backup_index[node].get(int(vmid), [])
+
     seen: set[int] = set()
     count = 0
     for res in resources:
@@ -463,15 +643,170 @@ def sync_host_guests(db: Session, host: ProxmoxHost) -> int:
             guest.disk_bytes = None
         count += 1
 
+    # Apply backup-job membership and PBS snapshot inventory once the full VMID
+    # set is known (needed for jobs that back up "all" guests).
+    for g in db.query(Guest).filter(Guest.host_id == host.id).all():
+        if g.vmid not in seen:
+            continue
+        covered, matching = vmid_in_backup_jobs(
+            g.vmid, backup_jobs, known_vmids=seen, require_enabled=False
+        )
+        g.in_backup_job = covered
+        g.backup_job_enabled = any(
+            j.get("enabled", 1) not in (0, False, "0", "false", "False") for j in matching
+        )
+        g.backup_job_summary = _backup_job_summary(matching) if matching else ""
+
+        snapshots = backups_for(g.node, g.vmid)
+        g.backup_snapshot_count = len(snapshots)
+        newest_ctime = snapshots[0].get("ctime") if snapshots else None
+        g.last_backup_at = (
+            datetime.fromtimestamp(int(newest_ctime), tz=timezone.utc)
+            if newest_ctime
+            else None
+        )
+
     existing = db.query(Guest).filter(Guest.host_id == host.id).all()
+    removed = 0
     for g in existing:
         if g.vmid not in seen:
+            _skip_queued_runs_for_guest(
+                db,
+                g,
+                f"VMID {g.vmid} ({g.name}) no longer exists on host {host.name}",
+            )
             db.delete(g)
+            removed += 1
+    if removed:
+        logger.info("Sync removed %s guest(s) no longer on host %s", removed, host.name)
 
     host.last_sync_at = datetime.now(timezone.utc)
     host.last_error = None
     db.commit()
     return count
+
+
+class PreflightResult:
+    """
+    Outcome of the pre-restore validation for one guest.
+
+    ``skip`` marks the "nothing was ever expected to be restored" cases — the
+    guest is gone, or no backup is configured/exists. Those are not errors: the
+    run is recorded as skipped and no failure notification is sent. Only genuine
+    problems (an unreachable host) are treated as failures.
+    """
+
+    def __init__(
+        self,
+        ok: bool,
+        reason: str = "",
+        *,
+        guest_missing: bool = False,
+        unreachable: bool = False,
+        skip: bool = False,
+    ):
+        self.ok = ok
+        self.reason = reason
+        self.guest_missing = guest_missing
+        self.unreachable = unreachable
+        self.skip = skip
+
+
+def preflight_restore_check(
+    db: Session,
+    guest: Guest,
+    host: ProxmoxHost,
+    client: Optional[ProxmoxClient] = None,
+) -> PreflightResult:
+    """
+    Verify a guest can actually be restore-tested, against live Proxmox state.
+
+    Checks, in order: the guest still exists on the host, it belongs to a
+    Datacenter backup job, and at least one PBS snapshot exists. Findings are
+    written back to the Guest row so the UI reflects them without a full sync.
+    """
+    try:
+        client = client or _client_for_host(host)
+        resources = client.cluster_resources(resource_type="vm")
+    except Exception as exc:  # noqa: BLE001
+        return PreflightResult(
+            False,
+            f"Could not reach Proxmox host {host.name}: {exc}",
+            unreachable=True,
+        )
+
+    match = None
+    known_vmids: set[int] = set()
+    for res in resources:
+        vmid = res.get("vmid")
+        if vmid is None:
+            continue
+        known_vmids.add(int(vmid))
+        if int(vmid) == int(guest.vmid) and res.get("type") in ("qemu", "lxc"):
+            match = res
+
+    if match is None:
+        return PreflightResult(
+            False,
+            f"VMID {guest.vmid} ({guest.name}) no longer exists on host {host.name}. "
+            "Sync the host to drop it from the inventory.",
+            guest_missing=True,
+            skip=True,
+        )
+
+    # Keep node/name current: a migrated guest would otherwise restore on the wrong node.
+    guest.node = match.get("node") or guest.node
+    guest.name = match.get("name") or guest.name
+    guest.status = match.get("status") or guest.status
+
+    try:
+        jobs = client.list_backup_jobs()
+    except ProxmoxAPIError as exc:
+        logger.warning("Could not list backup jobs for host %s: %s", host.name, exc)
+        jobs = []
+    covered, matching = vmid_in_backup_jobs(
+        guest.vmid, jobs, known_vmids=known_vmids, require_enabled=False
+    )
+    guest.in_backup_job = covered
+    guest.backup_job_enabled = any(
+        j.get("enabled", 1) not in (0, False, "0", "false", "False") for j in matching
+    )
+    guest.backup_job_summary = _backup_job_summary(matching) if matching else ""
+    if not covered:
+        db.commit()
+        return PreflightResult(
+            False,
+            f"VMID {guest.vmid} ({guest.name}) is not in any Proxmox backup job "
+            "(Datacenter → Backup), so there is nothing to restore-test.",
+            skip=True,
+        )
+
+    try:
+        backups = client.find_pbs_backups(guest.node, guest.vmid)
+    except ProxmoxAPIError as exc:
+        return PreflightResult(
+            False,
+            f"Could not list backups for VMID {guest.vmid}: {exc}",
+            unreachable=True,
+        )
+    guest.backup_snapshot_count = len(backups)
+    newest_ctime = backups[0].get("ctime") if backups else None
+    guest.last_backup_at = (
+        datetime.fromtimestamp(int(newest_ctime), tz=timezone.utc) if newest_ctime else None
+    )
+    db.commit()
+
+    if not backups:
+        job_hint = guest.backup_job_summary or "its backup job"
+        return PreflightResult(
+            False,
+            f"No PBS backup exists yet for VMID {guest.vmid} ({guest.name}). "
+            f"It is scheduled by {job_hint} but has not produced a snapshot — "
+            "run that backup job first.",
+            skip=True,
+        )
+
+    return PreflightResult(True)
 
 
 def sync_enabled_hosts_for_schedule(db: Session, window_start: datetime) -> int:
@@ -511,18 +846,25 @@ def sync_enabled_hosts_for_schedule(db: Session, window_start: datetime) -> int:
     return synced
 
 
-async def notify_run(db: Session, run: RestoreRun) -> None:
-    settings = get_app_settings(db)
-    if run.status == "success" and not settings.notify_on_success:
-        return
-    if run.status == "failed" and not settings.notify_on_failure:
+def _wants_notification(status: str, *, on_success: bool, on_failure: bool) -> bool:
+    if status == "success":
+        return on_success
+    if status == "failed":
+        return on_failure
+    return False
+
+
+async def _email_run(db: Session, run: RestoreRun, settings, ctx: dict) -> None:
+    if not _wants_notification(
+        run.status,
+        on_success=settings.notify_on_success,
+        on_failure=settings.notify_on_failure,
+    ):
         return
     to_addrs = parse_addr_list(settings.notify_to)
     if not to_addrs:
         return
     cc_addrs = parse_addr_list(settings.notify_cc)
-    app_url = get_settings().app_base_url.rstrip("/")
-    ctx = build_notification_context(run, app_url)
     if run.status == "success":
         subject = Template(settings.email_success_subject).render(**ctx)
         body = Template(settings.email_success_body).render(**ctx)
@@ -546,6 +888,34 @@ async def notify_run(db: Session, run: RestoreRun) -> None:
     except Exception as exc:  # noqa: BLE001
         _log(run, f"Email failed: {exc}")
         logger.exception("email failed")
+
+
+async def _push_run(db: Session, run: RestoreRun, ctx: dict) -> None:
+    push = get_push_settings(db)
+    if not push.enabled or not push.url.strip():
+        return
+    if not _wants_notification(
+        run.status, on_success=push.on_success, on_failure=push.on_failure
+    ):
+        return
+    try:
+        await send_push(db, **build_run_push(run, ctx))
+        _log(run, "Push notification sent")
+    except Exception as exc:  # noqa: BLE001
+        _log(run, f"Push failed: {exc}")
+        logger.exception("push failed")
+
+
+async def notify_run(db: Session, run: RestoreRun) -> None:
+    # A skipped run means no backup was expected — never alert on it.
+    if run.status == "skipped":
+        return
+    settings = get_app_settings(db)
+    app_url = get_settings().app_base_url.rstrip("/")
+    ctx = build_notification_context(run, app_url)
+    # Each channel decides independently, and neither can break the other.
+    await _email_run(db, run, settings, ctx)
+    await _push_run(db, run, ctx)
     db.commit()
 
 
@@ -553,6 +923,22 @@ def execute_restore_run(db: Session, run_id: int) -> None:
     """Synchronous restore pipeline (called from worker)."""
     run = db.query(RestoreRun).filter_by(id=run_id).first()
     if not run:
+        return
+
+    # The guest can be deleted from Proxmox (and pruned by sync) between queueing
+    # and execution. Cancel rather than burn a lock on a doomed restore.
+    queued_guest = db.query(Guest).filter_by(id=run.guest_id).first() if run.guest_id else None
+    if queued_guest is None:
+        run.status = "skipped"
+        run.error_message = (
+            f"VMID {run.source_vmid} ({run.source_name}) is no longer in inventory — "
+            "restore test skipped"
+        )
+        run.progress_label = "Skipped"
+        run.progress_pct = 100.0
+        run.finished_at = datetime.now(timezone.utc)
+        _log(run, "Run skipped: guest no longer exists on Proxmox")
+        db.commit()
         return
 
     holder = f"worker-{uuid.uuid4().hex[:8]}"
@@ -591,9 +977,26 @@ def execute_restore_run(db: Session, run_id: int) -> None:
         db.commit()
 
         client = _client_for_host(host)
-        _set_progress(db, run, pct=5.0, label="Connected — finding backup")
+        _set_progress(db, run, pct=5.0, label="Connected — validating backup")
         _log(run, f"Connected to Proxmox API for host {host.name}")
         db.commit()
+
+        preflight = preflight_restore_check(db, guest, host, client=client)
+        if not preflight.ok:
+            if preflight.skip:
+                # No backup was expected, so no restore was expected: record it as
+                # skipped rather than a failure, and send no notification.
+                run.status = "skipped"
+                run.error_message = preflight.reason
+                run.progress_label = "Skipped"
+                run.progress_pct = 100.0
+                run.finished_at = datetime.now(timezone.utc)
+                _log(run, f"Run skipped: {preflight.reason}")
+                db.commit()
+                return  # `finally` releases the global lock
+            raise RuntimeError(preflight.reason)
+        _log(run, "Pre-flight OK: guest present, in a backup job, snapshot available")
+        node = guest.node
 
         backups = client.find_pbs_backups(node, guest.vmid)
         if not backups:
@@ -1107,6 +1510,18 @@ def execute_restore_run(db: Session, run_id: int) -> None:
             raise RuntimeError(
                 f"Detach incomplete; still present: {leftover_nets + leftover_host}"
             )
+        # Source backups often copy protection: 1, which blocks destroy later.
+        try:
+            if client.clear_guest_protection(node, test_vmid, guest_type):
+                _log(run, "Cleared protection on test guest (copied from source backup)")
+        except ProxmoxAPIError as prot_exc:
+            if ssh_ready:
+                _log(run, f"API could not clear protection ({prot_exc}); trying SSH")
+                with _open_ssh() as ssh:
+                    ssh.clear_protection(guest_type, int(test_vmid))
+                _log(run, "Cleared protection via SSH")
+            else:
+                _log(run, f"Warning: could not clear protection: {prot_exc}")
         db.commit()
 
         if guest_type == "qemu":

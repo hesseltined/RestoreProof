@@ -2,8 +2,8 @@
  * Purpose: Restore run history and evidence viewer.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-22
- * Version: 1.3.0
+ * Modified: 2026-07-31
+ * Version: 1.4.0
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -49,6 +49,7 @@ const PAGE_SIZES = [10, 20, 50, 100] as const;
 
 function statusBadgeClass(status: string, usedFallback?: boolean): string {
   if (status === "failed") return "fail";
+  if (status === "skipped") return "muted";
   if (status === "success" && usedFallback) return "warn";
   if (status === "success") return "ok";
   return "run";

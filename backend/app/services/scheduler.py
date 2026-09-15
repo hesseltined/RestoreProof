@@ -2,8 +2,8 @@
 Purpose: Schedule helpers — due times, batch windows, coverage planning.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-28
-Version: 1.2.0
+Modified: 2026-07-31
+Version: 1.4.0
 """
 
 from __future__ import annotations
@@ -19,8 +19,13 @@ from app.models import Guest, ProxmoxHost, RestoreRun
 from app.services.bootstrap import get_app_settings
 
 
+def is_restorable(guest: Guest) -> bool:
+    """A guest can only be drilled if a backup job covers it and a snapshot exists."""
+    return bool(guest.in_backup_job) and int(guest.backup_snapshot_count or 0) > 0
+
+
 def effective_cron(guest: Guest, global_cron: str) -> Optional[str]:
-    if guest.excluded or not guest.schedule_enabled:
+    if guest.excluded or not guest.schedule_enabled or not is_restorable(guest):
         return None
     if guest.schedule_cron:
         return guest.schedule_cron
@@ -97,6 +102,8 @@ def eligible_guests(db: Session) -> list[Guest]:
         .filter(
             Guest.excluded.is_(False),
             Guest.schedule_enabled.is_(True),
+            Guest.in_backup_job.is_(True),
+            Guest.backup_snapshot_count > 0,
             ProxmoxHost.enabled.is_(True),
         )
         .all()
@@ -178,7 +185,21 @@ def build_schedule_plan(db: Session) -> dict:
     settings = get_app_settings(db)
     total = db.query(Guest).count()
     excluded = db.query(Guest).filter(Guest.excluded.is_(True)).count()
-    # Eligible = not excluded and schedule_enabled
+    not_backed_up = (
+        db.query(Guest)
+        .filter(Guest.in_backup_job.is_(False), Guest.excluded.is_(False))
+        .count()
+    )
+    no_snapshot = (
+        db.query(Guest)
+        .filter(
+            Guest.in_backup_job.is_(True),
+            Guest.excluded.is_(False),
+            Guest.backup_snapshot_count == 0,
+        )
+        .count()
+    )
+    # Eligible = not excluded, schedule_enabled, in a backup job, and has a snapshot
     eligible = len(eligible_guests(db))
     cron = settings.global_cron or "0 2 * * *"
     batch = max(1, int(settings.schedule_batch_size or 1))
@@ -202,7 +223,10 @@ def build_schedule_plan(db: Session) -> dict:
     remaining = max(0, batch - enqueued)
 
     if eligible == 0:
-        summary = "No eligible guests yet (sync inventory and un-exclude guests you want tested)."
+        summary = (
+            "No eligible guests yet (sync inventory, ensure guests are listed in a Proxmox "
+            "backup job, and un-exclude guests you want tested)."
+        )
     elif batch == 1 and ticks_per_day >= 0.9:
         summary = (
             f"Each schedule tick tests 1 guest. With {eligible} eligible guests, "
@@ -215,10 +239,22 @@ def build_schedule_plan(db: Session) -> dict:
             f"covers ~{int(batch * ticks_week)} guests/week "
             f"({eligible} eligible). At this rate a full cycle fits in a {period}."
         )
+    if not_backed_up:
+        summary += (
+            f" {not_backed_up} guest(s) are on the host but not in any Proxmox backup job "
+            "and are skipped for restore tests."
+        )
+    if no_snapshot:
+        summary += (
+            f" {no_snapshot} guest(s) are in a backup job but have no PBS snapshot yet "
+            "and are skipped until their first backup completes."
+        )
 
     return {
         "total_guests": total,
         "excluded_count": excluded,
+        "not_backed_up_count": not_backed_up,
+        "no_snapshot_count": no_snapshot,
         "eligible_count": eligible,
         "schedule_batch_size": batch,
         "schedule_coverage_goal": goal,

@@ -2,8 +2,8 @@
  * Purpose: Dashboard overview with live restore progress and optional setup wizard.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-22
- * Version: 1.4.0
+ * Modified: 2026-07-31
+ * Version: 1.5.0
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -43,6 +43,7 @@ type Dashboard = {
   lock_held: boolean;
   lock_held_by: string | null;
   recent_runs: Run[];
+  recent_runs_total?: number;
   guest_count: number;
   excluded_count: number;
   host_count: number;
@@ -50,21 +51,49 @@ type Dashboard = {
   active_run: ActiveRun | null;
 };
 
+/** 0 means "all" — matches the API's recent_limit contract. */
+const RUN_LIMIT_CHOICES = [10, 20, 30, 40, 50, 0] as const;
+const RUN_LIMIT_KEY = "restoreproof.dashboard.recentLimit";
+const DEFAULT_RUN_LIMIT = 10;
+
+function loadStoredLimit(): number {
+  try {
+    const raw = window.localStorage.getItem(RUN_LIMIT_KEY);
+    if (raw === null) return DEFAULT_RUN_LIMIT;
+    const parsed = Number(raw);
+    return RUN_LIMIT_CHOICES.includes(parsed as (typeof RUN_LIMIT_CHOICES)[number])
+      ? parsed
+      : DEFAULT_RUN_LIMIT;
+  } catch {
+    return DEFAULT_RUN_LIMIT;
+  }
+}
+
 export function DashboardPage() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [error, setError] = useState("");
   const [retryBusyId, setRetryBusyId] = useState<number | null>(null);
+  const [runLimit, setRunLimit] = useState<number>(loadStoredLimit);
   const navigate = useNavigate();
 
   const load = useCallback(async () => {
-    const d = await api<Dashboard>("/dashboard");
+    const d = await api<Dashboard>(`/dashboard?recent_limit=${runLimit}`);
     setData(d);
     return d;
-  }, []);
+  }, [runLimit]);
 
   useEffect(() => {
     load().catch((e) => setError(e.message));
   }, [load]);
+
+  function changeRunLimit(next: number) {
+    setRunLimit(next);
+    try {
+      window.localStorage.setItem(RUN_LIMIT_KEY, String(next));
+    } catch {
+      /* private browsing can reject writes; the selection still applies now */
+    }
+  }
 
   async function retry(runId: number) {
     setError("");
@@ -93,6 +122,8 @@ export function DashboardPage() {
   if (!data) return <p className="help">Loading dashboard…</p>;
 
   const active = data.active_run;
+  const shownCount = data.recent_runs.length;
+  const totalCount = data.recent_runs_total ?? shownCount;
   const pct =
     active?.progress_pct != null
       ? Math.max(0, Math.min(100, Math.round(active.progress_pct)))
@@ -200,7 +231,29 @@ export function DashboardPage() {
         </div>
       </div>
       <div className="card">
-        <h3 style={{ marginTop: 0 }}>Recent runs</h3>
+        <div className="card-head">
+          <h3 style={{ margin: 0 }}>Recent runs</h3>
+          <label className="inline-select">
+            Show
+            <select
+              value={runLimit}
+              onChange={(e) => changeRunLimit(Number(e.target.value))}
+            >
+              {RUN_LIMIT_CHOICES.map((n) => (
+                <option key={n} value={n}>
+                  {n === 0 ? "All" : n}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <p className="help" style={{ marginTop: 0 }}>
+          {shownCount === 0
+            ? "No runs recorded yet."
+            : totalCount > shownCount
+              ? `Showing the ${shownCount} most recent of ${totalCount} runs.`
+              : `Showing all ${shownCount} run${shownCount === 1 ? "" : "s"}.`}
+        </p>
         <div className="table-wrap">
           <table className="data">
             <thead>

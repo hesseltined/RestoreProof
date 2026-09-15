@@ -2,8 +2,8 @@
 Purpose: Proxmox VE REST API client (token auth).
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-23
-Version: 1.5.0
+Modified: 2026-09-11
+Version: 1.8.0
 """
 
 from __future__ import annotations
@@ -19,6 +19,69 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _PCT_RE = re.compile(r"(\d{1,3}(?:\.\d+)?)\s*%")
+
+
+def parse_backup_job_vmids(job: dict) -> tuple[bool, set[int], set[int]]:
+    """
+    Parse a Proxmox cluster backup job into (covers_all, include_vmids, exclude_vmids).
+
+    ``covers_all`` is True when the job backs up every guest (minus excludes).
+    """
+    exclude: set[int] = set()
+    raw_excl = job.get("exclude")
+    if raw_excl is not None and str(raw_excl).strip() != "":
+        for part in str(raw_excl).split(","):
+            part = part.strip()
+            if part.isdigit():
+                exclude.add(int(part))
+
+    all_flag = job.get("all")
+    covers_all = all_flag in (1, True, "1", "true", "True")
+
+    include: set[int] = set()
+    raw_vmid = job.get("vmid")
+    if raw_vmid is not None and str(raw_vmid).strip() != "":
+        for part in str(raw_vmid).split(","):
+            part = part.strip()
+            if part.isdigit():
+                include.add(int(part))
+
+    if covers_all:
+        return True, set(), exclude
+    return False, include, exclude
+
+
+def vmid_in_backup_jobs(
+    vmid: int,
+    jobs: list[dict],
+    *,
+    known_vmids: Optional[set[int]] = None,
+    require_enabled: bool = False,
+) -> tuple[bool, list[dict]]:
+    """
+    Return (is_covered, matching_jobs) for a guest VMID against vzdump jobs.
+
+    When ``require_enabled`` is True, only jobs with enabled=1 are considered.
+    ``known_vmids`` is used when a job has ``all: 1`` (every guest on the host).
+    """
+    matching: list[dict] = []
+    for job in jobs:
+        if str(job.get("type") or "vzdump") not in ("vzdump", ""):
+            continue
+        enabled = job.get("enabled", 1)
+        is_enabled = enabled not in (0, False, "0", "false", "False")
+        if require_enabled and not is_enabled:
+            continue
+        covers_all, include, exclude = parse_backup_job_vmids(job)
+        if int(vmid) in exclude:
+            continue
+        if covers_all:
+            if known_vmids is None or int(vmid) in known_vmids:
+                matching.append(job)
+            continue
+        if int(vmid) in include:
+            matching.append(job)
+    return bool(matching), matching
 
 
 def is_successful_task_exit(exitstatus: object) -> bool:
@@ -115,9 +178,9 @@ class ProxmoxClient:
             params["content"] = content
         return self.request("GET", f"/nodes/{node}/storage/{storage}/content", params=params) or []
 
-    def find_pbs_backups(self, node: str, vmid: int) -> list[dict]:
-        """Return backup volumes for a VMID across PBS-capable storages, newest first."""
-        backups: list[dict] = []
+    def _backup_items(self, node: str) -> list[dict]:
+        """Raw backup volumes from every PBS-capable storage on a node."""
+        items: list[dict] = []
         for st in self.node_storage(node):
             storage_id = st.get("storage")
             content = str(st.get("content") or "")
@@ -125,23 +188,55 @@ class ProxmoxClient:
             if "backup" not in content and stype != "pbs":
                 continue
             try:
-                items = self.storage_content(node, storage_id, content="backup")
+                found = self.storage_content(node, storage_id, content="backup")
             except ProxmoxAPIError:
                 continue
-            for item in items:
-                if int(item.get("vmid") or -1) != int(vmid):
-                    continue
-                # Prefer PBS / vzdump backup entries
+            for item in found:
                 volid = item.get("volid") or ""
                 if stype == "pbs" or "backup/" in volid or volid.startswith(f"{storage_id}:backup/"):
-                    item = dict(item)
-                    item["_storage"] = storage_id
-                    item["_stype"] = stype
-                    backups.append(item)
+                    entry = dict(item)
+                    entry["_storage"] = storage_id
+                    entry["_stype"] = stype
+                    items.append(entry)
+        return items
+
+    @staticmethod
+    def _prefer_pbs(backups: list[dict]) -> list[dict]:
+        """Newest-first, preferring true PBS volumes over other backup targets."""
         backups.sort(key=lambda b: b.get("ctime") or 0, reverse=True)
-        # v1: PBS only — keep pbs type or volids that look like PBS
-        pbs_only = [b for b in backups if b.get("_stype") == "pbs" or "backup/vm/" in str(b.get("volid")) or "backup/ct/" in str(b.get("volid"))]
+        pbs_only = [
+            b
+            for b in backups
+            if b.get("_stype") == "pbs"
+            or "backup/vm/" in str(b.get("volid"))
+            or "backup/ct/" in str(b.get("volid"))
+        ]
         return pbs_only or backups
+
+    def find_pbs_backups(self, node: str, vmid: int) -> list[dict]:
+        """Return backup volumes for a VMID across PBS-capable storages, newest first."""
+        backups = [
+            item
+            for item in self._backup_items(node)
+            if int(item.get("vmid") or -1) == int(vmid)
+        ]
+        return self._prefer_pbs(backups)
+
+    def pbs_backup_index(self, node: str) -> dict[int, list[dict]]:
+        """
+        Map every VMID on a node to its backup volumes (newest first).
+
+        One pass over node storages so inventory sync does not issue a separate
+        content listing per guest.
+        """
+        grouped: dict[int, list[dict]] = {}
+        for item in self._backup_items(node):
+            try:
+                vmid = int(item.get("vmid"))
+            except (TypeError, ValueError):
+                continue
+            grouped.setdefault(vmid, []).append(item)
+        return {vmid: self._prefer_pbs(items) for vmid, items in grouped.items()}
 
     def wait_task(
         self,
@@ -331,22 +426,99 @@ class ProxmoxClient:
     def lxc_stop(self, node: str, vmid: int) -> str:
         return self.request("POST", f"/nodes/{node}/lxc/{vmid}/status/stop")
 
-    def qemu_delete(self, node: str, vmid: int, purge: bool = True) -> str:
-        params = {"purge": 1, "destroy-unreferenced-disks": 1} if purge else {}
+    def qemu_delete(
+        self, node: str, vmid: int, purge: bool = True, skiplock: bool = False
+    ) -> str:
+        params: dict[str, Any] = {}
+        if purge:
+            params["purge"] = 1
+            params["destroy-unreferenced-disks"] = 1
+        if skiplock:
+            params["skiplock"] = 1
         return self.request("DELETE", f"/nodes/{node}/qemu/{vmid}", params=params)
 
-    def lxc_delete(self, node: str, vmid: int, purge: bool = True) -> str:
-        params = {"purge": 1, "destroy-unreferenced-disks": 1} if purge else {}
+    def lxc_delete(
+        self, node: str, vmid: int, purge: bool = True, force: bool = False
+    ) -> str:
+        params: dict[str, Any] = {}
+        if purge:
+            params["purge"] = 1
+            params["destroy-unreferenced-disks"] = 1
+        if force:
+            params["force"] = 1
         return self.request("DELETE", f"/nodes/{node}/lxc/{vmid}", params=params)
+
+    def clear_guest_protection(self, node: str, vmid: int, guest_type: str) -> bool:
+        """Clear the Proxmox protection flag. Returns True if it was set."""
+        if guest_type == "qemu":
+            cfg = self.qemu_config(node, vmid)
+            setter = self.qemu_set_config
+        else:
+            cfg = self.lxc_config(node, vmid)
+            setter = self.lxc_set_config
+        if not guest_is_protected(cfg):
+            return False
+        setter(node, vmid, protection=0)
+        return True
 
     def next_id(self) -> int:
         return int(self.request("GET", "/cluster/nextid"))
+
+    def list_backup_jobs(self) -> list[dict]:
+        """Return Proxmox vzdump / cluster backup jobs (from /cluster/backup)."""
+        data = self.request("GET", "/cluster/backup") or []
+        if isinstance(data, list):
+            return data
+        return []
 
     def cluster_resources(self, resource_type: Optional[str] = None) -> list[dict]:
         params = {}
         if resource_type:
             params["type"] = resource_type
         return self.request("GET", "/cluster/resources", params=params) or []
+
+
+def guest_is_protected(cfg: dict) -> bool:
+    """True when a QEMU/LXC config has Proxmox's protection flag set."""
+    raw = cfg.get("protection")
+    if raw in (1, True, "1", "true", "True", "yes", "on"):
+        return True
+    try:
+        return int(raw) == 1
+    except (TypeError, ValueError):
+        return False
+
+
+def leftover_test_pool_guests(
+    resources: list[dict],
+    pool_start: int,
+    pool_end: int,
+    busy_vmids: Optional[set[int]] = None,
+) -> list[tuple[int, str, str]]:
+    """
+    Return (vmid, node, guest_type) for cluster resources in a host's test pool.
+
+    Skips VMIDs currently used by a queued/running restore (``busy_vmids``).
+    """
+    busy = busy_vmids or set()
+    found: list[tuple[int, str, str]] = []
+    for res in resources:
+        try:
+            vmid = int(res.get("vmid"))
+        except (TypeError, ValueError):
+            continue
+        if vmid < int(pool_start) or vmid > int(pool_end):
+            continue
+        if vmid in busy:
+            continue
+        node = str(res.get("node") or "").strip()
+        if not node:
+            continue
+        rtype = str(res.get("type") or "")
+        guest_type = "lxc" if rtype == "lxc" else "qemu"
+        found.append((vmid, node, guest_type))
+    found.sort(key=lambda item: item[0])
+    return found
 
 
 def qemu_hostdev_keys(cfg: dict) -> list[str]:

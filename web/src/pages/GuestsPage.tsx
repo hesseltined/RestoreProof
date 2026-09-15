@@ -2,8 +2,8 @@
  * Purpose: Guest inventory with exclude, schedule override, run now.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-22
- * Version: 1.8.0
+ * Modified: 2026-07-31
+ * Version: 1.10.0
  */
 
 import { useEffect, useState } from "react";
@@ -36,6 +36,11 @@ type Guest = {
   memory_bytes: number | null;
   disk_bytes: number | null;
   excluded: boolean;
+  in_backup_job: boolean;
+  backup_job_enabled: boolean;
+  backup_job_summary: string;
+  backup_snapshot_count: number;
+  last_backup_at: string | null;
   schedule_cron: string | null;
   schedule_enabled: boolean;
   last_tested_at: string | null;
@@ -98,6 +103,55 @@ function presetValueForCron(cron: string | null): string {
   return known ? known.value : "__custom__";
 }
 
+type BackupState = {
+  tone: "ok" | "warn" | "fail";
+  label: string;
+  title: string;
+  /** False when a restore drill would certainly fail. */
+  restorable: boolean;
+  /** Why the schedule skips this guest, if it does. */
+  skipReason: string;
+};
+
+function backupState(g: Guest): BackupState {
+  if (!g.in_backup_job) {
+    return {
+      tone: "fail",
+      label: "Not in job",
+      title:
+        "Not listed in any Proxmox backup job (Datacenter → Backup). Nothing exists to restore.",
+      restorable: false,
+      skipReason: "Skipped (not in backup job)",
+    };
+  }
+  if (!g.backup_snapshot_count) {
+    return {
+      tone: "fail",
+      label: "No backup yet",
+      title:
+        "Covered by a backup job, but no PBS snapshot exists yet. Run that backup job first.",
+      restorable: false,
+      skipReason: "Skipped (no backup yet)",
+    };
+  }
+  if (!g.backup_job_enabled) {
+    return {
+      tone: "warn",
+      label: "In job (disabled)",
+      title: g.backup_job_summary || "Backup job exists but is disabled",
+      restorable: true,
+      skipReason: "",
+    };
+  }
+  return {
+    tone: "ok",
+    label: "Scheduled",
+    title: g.backup_job_summary || "Listed in an active Proxmox backup job",
+    restorable: true,
+    skipReason: "",
+  };
+}
+
 function proofTone(run: GuestLatestRun | null): "ok" | "warn" | "fail" | "run" | "none" {
   if (!run) return "none";
   if (run.status === "failed") return "fail";
@@ -122,6 +176,9 @@ function proofTitle(run: GuestLatestRun | null): string {
   }
   if (run.status === "running") return "Restore drill in progress…";
   if (run.status === "queued") return "Restore drill queued…";
+  if (run.status === "skipped") {
+    return `Restore drill skipped${run.error_message ? ` — ${run.error_message}` : ""}`;
+  }
   return `Last restore: ${run.status}${when ? ` · ${when}` : ""}`;
 }
 
@@ -196,6 +253,8 @@ function ScheduleOverrideCell({
     <div className="sched-override">
       {guest.excluded ? (
         <div className="sched-override-muted">Skipped (excluded)</div>
+      ) : backupState(guest).skipReason ? (
+        <div className="sched-override-muted">{backupState(guest).skipReason}</div>
       ) : (
         <>
           <select
@@ -287,11 +346,11 @@ export function GuestsPage() {
     <div>
       <h1 className="page-title">Guests</h1>
       <p className="page-sub">
-        Inventory from your Proxmox hosts. Specs refresh when you{" "}
-        <Link to="/hosts">sync a host</Link>. Nightly restore drills are configured on{" "}
-        <Link to="/schedule">Schedule</Link> — use <strong>Test schedule</strong> only if one guest
-        should run on a different cadence. Hover the lamp next to each power status for the last
-        restore result.
+        Inventory from your Proxmox hosts. Specs, backup-job membership, and snapshot age refresh
+        when you <Link to="/hosts">sync a host</Link>. Guests with no backup job or no PBS snapshot
+        are skipped for restore tests. Nightly drills are configured on <Link to="/schedule">Schedule</Link>
+        — use <strong>Test schedule</strong> only if one guest should run on a different cadence.
+        Hover the lamp next to each power status for the last restore result.
       </p>
       {error && <p className="error">{error}</p>}
 
@@ -305,6 +364,7 @@ export function GuestsPage() {
               <th>CPUs</th>
               <th>RAM</th>
               <th>Disk</th>
+              <th>Backup job</th>
               <th>Host</th>
               <th>Exclude</th>
               <th>
@@ -322,9 +382,9 @@ export function GuestsPage() {
                         <Link to="/schedule">Schedule</Link> for batch size and cadence.
                       </p>
                       <p>
-                        Pick a preset (or custom cron) only if this guest must be eligible on its{" "}
-                        <em>own</em> clock — for example, always Sunday mornings — instead of waiting
-                        its turn in the rotation.
+                        Guests must also appear in a Proxmox backup job (synced from Datacenter →
+                        Backup) and have at least one PBS snapshot. Otherwise Run now and the
+                        scheduler are blocked.
                       </p>
                       <ul>
                         <li>
@@ -332,9 +392,6 @@ export function GuestsPage() {
                         </li>
                         <li>
                           <strong>Does not</strong> change Proxmox backups — only restore drills.
-                        </li>
-                        <li>
-                          <strong>Run now</strong> always works, regardless of this setting.
                         </li>
                         <li>
                           <strong>Exclude</strong> removes the guest from auto-tests entirely.
@@ -348,8 +405,13 @@ export function GuestsPage() {
             </tr>
           </thead>
           <tbody>
-            {guests.map((g) => (
-              <tr key={g.id} className={g.excluded ? "row-excluded" : undefined}>
+            {guests.map((g) => {
+              const backup = backupState(g);
+              return (
+              <tr
+                key={g.id}
+                className={g.excluded || !backup.restorable ? "row-excluded" : undefined}
+              >
                 <td className="mono">{g.vmid}</td>
                 <td>
                   {g.name}
@@ -368,6 +430,17 @@ export function GuestsPage() {
                 <td className="mono">{g.cpu_cores ?? "—"}</td>
                 <td className="mono">{formatBytes(g.memory_bytes)}</td>
                 <td className="mono">{formatBytes(g.disk_bytes)}</td>
+                <td>
+                  <span className={`badge ${backup.tone}`} title={backup.title}>
+                    {backup.label}
+                  </span>
+                  <div className="help guest-backup-job-hint">
+                    {g.last_backup_at
+                      ? `Last backup ${formatDue(g.last_backup_at)}`
+                      : "No PBS snapshot"}
+                    {g.backup_job_summary ? <> · {g.backup_job_summary}</> : null}
+                  </div>
+                </td>
                 <td>
                   {g.host_name}
                   <div className="help">{g.node}</div>
@@ -390,17 +463,19 @@ export function GuestsPage() {
                   <button
                     className="btn small"
                     type="button"
-                    disabled={busyId === g.id}
+                    disabled={busyId === g.id || !backup.restorable}
+                    title={backup.restorable ? "Queue a restore drill now" : backup.title}
                     onClick={() => runNow(g.id)}
                   >
                     {busyId === g.id ? "Starting…" : "Run now"}
                   </button>
                 </td>
               </tr>
-            ))}
+              );
+            })}
             {!guests.length && (
               <tr>
-                <td colSpan={10} className="help">
+                <td colSpan={11} className="help">
                   No guests yet. Add a host and sync inventory. <Link to="/hosts">Hosts</Link>
                 </td>
               </tr>

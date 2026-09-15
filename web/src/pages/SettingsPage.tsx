@@ -2,8 +2,8 @@
  * Purpose: App settings — boot wait, retention, branding, config export/import, setup wizard.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-22
- * Version: 1.3.1
+ * Modified: 2026-07-30
+ * Version: 1.4.0
  */
 
 import { FormEvent, useEffect, useRef, useState } from "react";
@@ -51,6 +51,7 @@ export function SettingsPage() {
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
   const [purgeBefore, setPurgeBefore] = useState(defaultPurgeDate);
   const [purgeBusy, setPurgeBusy] = useState(false);
+  const [staleBusy, setStaleBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -151,6 +152,41 @@ export function SettingsPage() {
       setError(err instanceof Error ? err.message : "Purge failed");
     } finally {
       setPurgeBusy(false);
+    }
+  }
+
+  async function onPurgeStale() {
+    if (
+      !window.confirm(
+        "Delete restore runs for guests that are no longer on Proxmox (orphaned) and guests not listed in any Proxmox backup job?\n\nThis cannot be undone. Sync hosts first so backup-job membership is current."
+      )
+    ) {
+      return;
+    }
+    setStaleBusy(true);
+    setError("");
+    setMsg("");
+    try {
+      const res = await api<{
+        deleted: number;
+        orphaned_deleted: number;
+        not_backed_up_deleted: number;
+      }>("/settings/purge-stale-runs", {
+        method: "POST",
+        body: JSON.stringify({ orphaned: true, not_backed_up: true }),
+      });
+      if (res.deleted === 0) {
+        setMsg("No stale runs found — nothing deleted.");
+      } else {
+        setMsg(
+          `Purged ${res.deleted} stale run${res.deleted === 1 ? "" : "s"} ` +
+            `(${res.orphaned_deleted} orphaned, ${res.not_backed_up_deleted} not in backup job).`
+        );
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Stale purge failed");
+    } finally {
+      setStaleBusy(false);
     }
   }
 
@@ -323,6 +359,23 @@ export function SettingsPage() {
             {purgeBusy ? "Purging…" : "Purge older runs"}
           </button>
         </div>
+      </section>
+
+      <section className="card purge-runs-card">
+        <h2 className="section-title">Purge stale restore results</h2>
+        <p className="help">
+          Remove drill history for guests that are gone from Proxmox (orphaned after inventory sync)
+          or not listed in any Proxmox backup job. Sync hosts first so membership is up to date.
+          Does not delete Proxmox/PBS backups — only RestoreProof run history and evidence files.
+        </p>
+        <button
+          className="btn danger"
+          type="button"
+          disabled={staleBusy}
+          onClick={onPurgeStale}
+        >
+          {staleBusy ? "Purging…" : "Purge orphaned & not-backed-up runs"}
+        </button>
       </section>
     </div>
   );

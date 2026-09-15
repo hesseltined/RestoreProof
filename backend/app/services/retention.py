@@ -2,8 +2,8 @@
 Purpose: Retention cleanup for old restore runs and evidence files.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-22
-Version: 1.1.0
+Modified: 2026-07-30
+Version: 1.2.0
 """
 
 from __future__ import annotations
@@ -107,3 +107,57 @@ def purge_runs_before(db: Session, before: datetime) -> int:
         deleted += 1
     db.commit()
     return deleted
+
+
+def purge_stale_runs(
+    db: Session,
+    *,
+    orphaned: bool = True,
+    not_backed_up: bool = True,
+) -> tuple[int, int, int]:
+    """
+    Delete restore runs for guests that are gone or not configured for backups.
+
+    Returns (total_deleted, orphaned_deleted, not_backed_up_deleted).
+    """
+    orphaned_deleted = 0
+    not_backed_up_deleted = 0
+    seen_ids: set[int] = set()
+
+    if orphaned:
+        rows = (
+            db.query(RestoreRun)
+            .filter(RestoreRun.guest_id.is_(None))
+            .order_by(RestoreRun.created_at.asc())
+            .all()
+        )
+        for run in rows:
+            if run.id in seen_ids:
+                continue
+            _delete_run_files(run)
+            db.delete(run)
+            seen_ids.add(run.id)
+            orphaned_deleted += 1
+
+    if not_backed_up:
+        guest_ids = [
+            g.id
+            for g in db.query(Guest).filter(Guest.in_backup_job.is_(False)).all()
+        ]
+        if guest_ids:
+            rows = (
+                db.query(RestoreRun)
+                .filter(RestoreRun.guest_id.in_(guest_ids))
+                .order_by(RestoreRun.created_at.asc())
+                .all()
+            )
+            for run in rows:
+                if run.id in seen_ids:
+                    continue
+                _delete_run_files(run)
+                db.delete(run)
+                seen_ids.add(run.id)
+                not_backed_up_deleted += 1
+
+    db.commit()
+    return orphaned_deleted + not_backed_up_deleted, orphaned_deleted, not_backed_up_deleted

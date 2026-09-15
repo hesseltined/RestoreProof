@@ -2,8 +2,8 @@
 Purpose: Background worker — process queued restores, schedule rotation, retention.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-28
-Version: 1.5.0
+Modified: 2026-09-11
+Version: 1.7.0
 """
 
 from __future__ import annotations
@@ -16,9 +16,11 @@ from app.config import get_settings
 from app.database import Base, SessionLocal, engine, ensure_schema
 from app.models import RestoreRun
 from app.services.bootstrap import ensure_defaults, get_app_settings
+from app.services.heartbeat import maybe_send_heartbeat
 from app.services.restore import (
     execute_restore_run,
     recover_orphaned_runs,
+    sweep_leftover_test_guests,
     sync_enabled_hosts_for_schedule,
 )
 from app.services.retention import apply_retention
@@ -124,6 +126,9 @@ def main() -> None:
         recovered = recover_orphaned_runs(db)
         if recovered:
             logger.warning("Startup recovery closed %s interrupted run(s)", recovered)
+        swept = sweep_leftover_test_guests(db)
+        if swept:
+            logger.warning("Startup sweep destroyed %s leftover test guest(s)", swept)
     finally:
         db.close()
 
@@ -135,14 +140,25 @@ def main() -> None:
             if not worked:
                 maybe_enqueue_scheduled()
             loop += 1
-            if loop % 60 == 0:
+            if worked or loop % 60 == 0:
                 db = SessionLocal()
                 try:
-                    deleted = apply_retention(db)
-                    if deleted:
-                        logger.info("Retention deleted %s runs", deleted)
+                    if loop % 60 == 0:
+                        deleted = apply_retention(db)
+                        if deleted:
+                            logger.info("Retention deleted %s runs", deleted)
+                    swept = sweep_leftover_test_guests(db)
+                    if swept:
+                        logger.warning("Swept %s leftover test guest(s)", swept)
                 finally:
                     db.close()
+            # Only ping after a clean iteration, so a crashing or DB-less worker
+            # goes quiet and the external monitor raises the alarm.
+            db = SessionLocal()
+            try:
+                maybe_send_heartbeat(db)
+            finally:
+                db.close()
         except Exception:  # noqa: BLE001
             logger.exception("Worker loop error")
         time.sleep(5)

@@ -2,8 +2,8 @@
 Purpose: SSH helpers for QMP screendump, qmrestore/pct restore fallback, and key generation.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-13
-Version: 1.4.0
+Modified: 2026-09-11
+Version: 1.5.0
 """
 
 from __future__ import annotations
@@ -248,6 +248,55 @@ class SSHSession:
         if code != 0:
             raise RuntimeError(f"pct set --delete failed: {err or out}")
         return list(keys)
+
+    def clear_protection(self, guest_type: str, vmid: int) -> None:
+        """Clear Proxmox protection so a test guest can be destroyed."""
+        vid = int(vmid)
+        if guest_type == "qemu":
+            cmd = f"qm set {vid} --protection 0"
+        else:
+            cmd = f"pct set {vid} --protection 0"
+        code, out, err = self.run(cmd, timeout=60)
+        combined = f"{out or ''}{err or ''}".lower()
+        if code != 0 and "does not exist" not in combined and "no such" not in combined:
+            raise RuntimeError(f"clear protection failed: {err or out}")
+
+    def unlock_guest(self, guest_type: str, vmid: int) -> None:
+        """Best-effort unlock of a QEMU/LXC guest (safe if not locked)."""
+        vid = int(vmid)
+        if guest_type == "qemu":
+            self.run(f"qm unlock {vid} || true")
+            self.run(f"rm -f /var/lock/qemu-server/lock-{vid}.conf")
+            return
+        self.run(f"pct unlock {vid} || true")
+
+    def destroy_guest(self, guest_type: str, vmid: int) -> str:
+        """Stop and destroy a test guest as root. Returns 'deleted' or 'already gone'."""
+        vid = int(vmid)
+        self.unlock_guest(guest_type, vid)
+        try:
+            self.clear_protection(guest_type, vid)
+        except Exception:  # noqa: BLE001
+            pass
+        if guest_type == "qemu":
+            self.run(f"qm stop {vid} --timeout 30 || true", timeout=60)
+            code, out, err = self.run(
+                f"qm destroy {vid} --purge 1 --destroy-unreferenced-disks 1",
+                timeout=600,
+            )
+        else:
+            self.run(f"pct stop {vid} --timeout 30 || true", timeout=60)
+            code, out, err = self.run(
+                f"pct destroy {vid} --purge 1 --force 1",
+                timeout=600,
+            )
+        combined = f"{out or ''}{err or ''}"
+        low = combined.lower()
+        if code != 0:
+            if "does not exist" in low or "no such configuration" in low:
+                return "already gone"
+            raise RuntimeError(f"destroy {vid} failed: {combined[-2000:]}")
+        return "deleted"
 
     def fetch_file(self, remote_path: str, local_path: str) -> None:
         assert self.client is not None

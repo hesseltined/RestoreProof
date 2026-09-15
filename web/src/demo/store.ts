@@ -2,8 +2,8 @@
  * Purpose: In-memory sample fleet for the public RestoreProof /demo walkthrough.
  * Author: Doug Hesseltine
  * Created: 2026-07-13
- * Modified: 2026-07-22
- * Version: 2.0.0
+ * Modified: 2026-07-31
+ * Version: 2.5.0
  *
  * Three themed Proxmox hosts (Milky Way, Orion, Pizza Planet), 10–30 guests each,
  * ~90 days of weekly-ish restore history with occasional failures and remediations.
@@ -30,6 +30,11 @@ export type DemoGuest = {
   memory_bytes: number | null;
   disk_bytes: number | null;
   excluded: boolean;
+  in_backup_job: boolean;
+  backup_job_enabled: boolean;
+  backup_job_summary: string;
+  backup_snapshot_count: number;
+  last_backup_at: string | null;
   schedule_cron: string | null;
   schedule_enabled: boolean;
   last_tested_at: string | null;
@@ -123,6 +128,26 @@ export type DemoSmtp = {
   from_name: string;
   password_set: boolean;
   smtp_ok_at: string | null;
+};
+
+export type DemoHeartbeat = {
+  enabled: boolean;
+  url: string;
+  interval_seconds: number;
+  verify_ssl: boolean;
+  last_ping_at: string | null;
+  last_error: string;
+};
+
+export type DemoPush = {
+  enabled: boolean;
+  provider: string;
+  url: string;
+  verify_ssl: boolean;
+  on_success: boolean;
+  on_failure: boolean;
+  token_set: boolean;
+  push_ok_at: string | null;
 };
 
 const GiB = 1024 ** 3;
@@ -257,6 +282,11 @@ function daysAgo(d: number): string {
 
 function hoursFromNow(h: number): string {
   return new Date(Date.now() + h * 3600_000).toISOString();
+}
+
+/** Mirrors backend eligibility: covered by a backup job and a snapshot exists. */
+export function isRestorable(g: DemoGuest): boolean {
+  return g.in_backup_job && g.backup_snapshot_count > 0;
 }
 
 function isoAt(ms: number): string {
@@ -613,11 +643,28 @@ function buildGuestsAndRuns(rand: () => number) {
         memory_bytes: specs.memory_bytes,
         disk_bytes: specs.disk_bytes,
         excluded: sched.excluded,
+        in_backup_job: rand() >= 0.08,
+        backup_job_enabled: rand() >= 0.15,
+        backup_job_summary: "backup-demo (sun 01:00)",
+        backup_snapshot_count: intBetween(rand, 3, 14),
+        last_backup_at: hoursFromNow(-intBetween(rand, 4, 60)),
         schedule_cron: sched.schedule_cron,
         schedule_enabled: sched.schedule_enabled,
         last_tested_at: null,
         next_due_at: sched.excluded ? null : hoursFromNow(intBetween(rand, 2, 72)),
       };
+      if (!guest.in_backup_job) {
+        guest.backup_job_enabled = false;
+        guest.backup_job_summary = "";
+        guest.backup_snapshot_count = 0;
+        guest.last_backup_at = null;
+        guest.next_due_at = null;
+      } else if (rand() < 0.05) {
+        // Newly added guest: covered by a job but no snapshot has run yet.
+        guest.backup_snapshot_count = 0;
+        guest.last_backup_at = null;
+        guest.next_due_at = null;
+      }
       guests.push(guest);
       intervals.set(guest.id, sched.intervalDays);
     });
@@ -630,7 +677,7 @@ function buildGuestsAndRuns(rand: () => number) {
 
   // Per-guest history along their cadence
   for (const guest of guests) {
-    if (guest.excluded) continue;
+    if (guest.excluded || !isRestorable(guest)) continue;
     const intervalDays = intervals.get(guest.id) ?? 10;
     let cursor = oldest + intBetween(rand, 0, intervalDays) * 86400_000 + guest.id * 3600_000;
     let prevFailed = false;
@@ -663,7 +710,7 @@ function buildGuestsAndRuns(rand: () => number) {
   }
 
   // Ensure a few remediable failures in the last 7 days + a couple open failures
-  const eligible = guests.filter((g) => !g.excluded);
+  const eligible = guests.filter((g) => !g.excluded && isRestorable(g));
   const remTargets = [...eligible].sort(() => rand() - 0.5).slice(0, 3);
   for (const guest of remTargets) {
     const failMs = now - intBetween(rand, 2, 5) * 86400_000;
@@ -779,6 +826,26 @@ function createStore() {
     smtp_ok_at: hoursAgo(24),
   };
 
+  const push: DemoPush = {
+    enabled: true,
+    provider: "ntfy",
+    url: "https://ntfy.sh/restoreproof-demo-7f3a91",
+    verify_ssl: true,
+    on_success: false,
+    on_failure: true,
+    token_set: false,
+    push_ok_at: hoursAgo(24),
+  };
+
+  const heartbeat: DemoHeartbeat = {
+    enabled: true,
+    url: "http://uptime-kuma:3001/api/push/DemoPush01",
+    interval_seconds: 300,
+    verify_ssl: true,
+    last_ping_at: new Date(Date.now() - 90_000).toISOString(),
+    last_error: "",
+  };
+
   return {
     users,
     hosts,
@@ -786,6 +853,8 @@ function createStore() {
     runs,
     settings,
     smtp,
+    push,
+    heartbeat,
     nextHostId: 4,
     nextGuestId,
     nextRunId,
@@ -889,7 +958,13 @@ export function buildSchedulePlan() {
   const s = store.settings;
   const total = store.guests.length;
   const excluded = store.guests.filter((g) => g.excluded).length;
-  const eligible = total - excluded;
+  const notBackedUp = store.guests.filter((g) => !g.excluded && !g.in_backup_job).length;
+  const noSnapshot = store.guests.filter(
+    (g) => !g.excluded && g.in_backup_job && g.backup_snapshot_count === 0
+  ).length;
+  const eligible = store.guests.filter(
+    (g) => !g.excluded && g.schedule_enabled && isRestorable(g)
+  ).length;
   const batch = Math.max(1, s.schedule_batch_size);
   const ticksWeek = 1; // Sunday cron
   const ticksMonth = 4;
@@ -898,6 +973,8 @@ export function buildSchedulePlan() {
   return {
     total_guests: total,
     excluded_count: excluded,
+    not_backed_up_count: notBackedUp,
+    no_snapshot_count: noSnapshot,
     eligible_count: eligible,
     schedule_batch_size: batch,
     schedule_coverage_goal: s.schedule_coverage_goal,
@@ -919,19 +996,19 @@ export function buildSchedulePlan() {
   };
 }
 
-export function buildDashboard() {
+/** `recentLimit` of 0 means all, matching the API's recent_limit contract. */
+export function buildDashboard(recentLimit = 10) {
   const s = store.settings;
   const excluded = store.guests.filter((g) => g.excluded).length;
   const nextDue =
     store.guests
-      .filter((g) => !g.excluded && g.next_due_at)
+      .filter((g) => !g.excluded && isRestorable(g) && g.next_due_at)
       .sort((a, b) => String(a.next_due_at).localeCompare(String(b.next_due_at)))[0] || null;
   const active = store.activeRunId
     ? store.runs.find((r) => r.id === store.activeRunId) || null
     : null;
-  const recent = withRemediation(
-    [...store.runs].sort((a, b) => b.id - a.id).slice(0, 10)
-  );
+  const ordered = [...store.runs].sort((a, b) => b.id - a.id);
+  const recent = withRemediation(recentLimit ? ordered.slice(0, recentLimit) : ordered);
   return {
     setup_completed: true,
     schedule_enabled: s.schedule_enabled,
@@ -940,6 +1017,7 @@ export function buildDashboard() {
     lock_held_by: store.lockHeldBy,
     lock_run_id: store.activeRunId,
     recent_runs: recent,
+    recent_runs_total: store.runs.length,
     guest_count: store.guests.length,
     excluded_count: excluded,
     host_count: store.hosts.length,

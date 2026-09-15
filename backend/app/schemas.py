@@ -2,8 +2,8 @@
 Purpose: Pydantic request/response schemas.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-22
-Version: 1.7.0
+Modified: 2026-07-31
+Version: 1.11.0
 """
 
 from __future__ import annotations
@@ -114,11 +114,31 @@ class PurgeRunsOut(BaseModel):
     before: datetime
 
 
+class PurgeStaleRunsRequest(BaseModel):
+    """
+    Delete restore runs that no longer map to a testable guest.
+
+    - orphaned: guest was removed from Proxmox (guest_id is NULL)
+    - not_backed_up: guest exists but is not in any Proxmox backup job
+    """
+
+    orphaned: bool = True
+    not_backed_up: bool = True
+
+
+class PurgeStaleRunsOut(BaseModel):
+    deleted: int
+    orphaned_deleted: int = 0
+    not_backed_up_deleted: int = 0
+
+
 class SchedulePlanOut(BaseModel):
     """Planning numbers for coverage / batch sizing (excludes excluded guests)."""
 
     total_guests: int
     excluded_count: int
+    not_backed_up_count: int = 0
+    no_snapshot_count: int = 0
     eligible_count: int
     schedule_batch_size: int
     schedule_coverage_goal: str
@@ -163,6 +183,48 @@ class SmtpUpdate(BaseModel):
 
 class SmtpTestRequest(BaseModel):
     to_email: EmailStr
+
+
+class PushOut(BaseModel):
+    enabled: bool
+    provider: str
+    url: str
+    verify_ssl: bool
+    on_success: bool
+    on_failure: bool
+    token_set: bool
+    push_ok_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class PushUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    provider: Optional[str] = None
+    url: Optional[str] = None
+    verify_ssl: Optional[bool] = None
+    on_success: Optional[bool] = None
+    on_failure: Optional[bool] = None
+    # Blank/omitted keeps the stored token; "-" clears it.
+    token: Optional[str] = None
+
+
+class HeartbeatOut(BaseModel):
+    enabled: bool
+    url: str
+    interval_seconds: int
+    verify_ssl: bool
+    last_ping_at: Optional[datetime] = None
+    last_error: str = ""
+
+    model_config = {"from_attributes": True}
+
+
+class HeartbeatUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    url: Optional[str] = None
+    interval_seconds: Optional[int] = Field(default=None, ge=30, le=86400)
+    verify_ssl: Optional[bool] = None
 
 
 class HostCreate(BaseModel):
@@ -260,6 +322,11 @@ class GuestOut(BaseModel):
     memory_bytes: Optional[int] = None
     disk_bytes: Optional[int] = None
     excluded: bool
+    in_backup_job: bool = True
+    backup_job_enabled: bool = False
+    backup_job_summary: str = ""
+    backup_snapshot_count: int = 0
+    last_backup_at: Optional[datetime] = None
     schedule_cron: Optional[str]
     schedule_enabled: bool
     last_tested_at: Optional[datetime]
@@ -343,6 +410,8 @@ class DashboardOut(BaseModel):
     lock_held_by: Optional[str]
     lock_run_id: Optional[int]
     recent_runs: list[RunOut]
+    # Total runs on record, so the UI can say "showing 10 of 143".
+    recent_runs_total: int = 0
     guest_count: int
     excluded_count: int
     host_count: int

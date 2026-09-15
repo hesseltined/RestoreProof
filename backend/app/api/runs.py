@@ -2,8 +2,8 @@
 Purpose: Restore run history, evidence download, resend email, retry, pagination.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-22
-Version: 1.2.0
+Modified: 2026-07-31
+Version: 1.4.0
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from app.api.guests import _validate_restorable
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import Guest, RestoreRun, User
@@ -88,7 +89,10 @@ async def resend_email(
 
 @router.post("/{run_id}/retry", response_model=RunOut)
 def retry_run(
-    run_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)
+    run_id: int,
+    force: bool = Query(False, description="Skip pre-flight backup/existence validation"),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
 ) -> RunOut:
     """Queue a new restore drill for the same guest after a failed run."""
     run = db.query(RestoreRun).filter_by(id=run_id).first()
@@ -104,6 +108,7 @@ def retry_run(
     guest = db.query(Guest).filter_by(id=run.guest_id).first()
     if not guest:
         raise HTTPException(status_code=400, detail="Guest not found")
+    _validate_restorable(db, guest, force=force)
 
     active = (
         db.query(RestoreRun)

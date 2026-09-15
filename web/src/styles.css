@@ -2,8 +2,8 @@
  * Purpose: Global RestoreProof styles (light/dark, uncluttered ops console).
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-22
- * Version: 1.7.1
+ * Modified: 2026-07-31
+ * Version: 1.8.0
  */
 
 :root,
@@ -345,6 +345,31 @@ textarea {
   font-size: 0.85rem;
 }
 
+/* Card title with a control pushed to the right (e.g. row-count selector) */
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.inline-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.inline-select select {
+  width: auto;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.85rem;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -404,6 +429,12 @@ table.data th {
   background: color-mix(in srgb, var(--warn) 22%, transparent);
   color: var(--warn);
   border-color: transparent;
+}
+
+.badge.muted {
+  background: var(--surface-2);
+  color: var(--muted);
+  border-color: var(--border);
 }
 
 .callout-warn {
@@ -767,6 +798,13 @@ a.guest-proof-lamp:hover {
 
 .row-excluded {
   opacity: 0.62;
+}
+
+.guest-backup-job-hint {
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sched-override {

@@ -2,8 +2,8 @@
  * Purpose: Global schedule settings — cadence, batch size, coverage planning.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-12
- * Version: 1.7.0
+ * Modified: 2026-07-31
+ * Version: 1.9.0
  */
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
@@ -53,6 +53,8 @@ type Settings = {
 type Plan = {
   total_guests: number;
   excluded_count: number;
+  not_backed_up_count?: number;
+  no_snapshot_count?: number;
   eligible_count: number;
   schedule_batch_size: number;
   schedule_coverage_goal: string;
@@ -334,6 +336,14 @@ export function SchedulePage() {
                       <div className="stat">
                         <div className="label">Excluded</div>
                         <div className="value">{plan.excluded_count}</div>
+                      </div>
+                      <div className="stat">
+                        <div className="label">Not in backup job</div>
+                        <div className="value">{plan.not_backed_up_count ?? 0}</div>
+                      </div>
+                      <div className="stat">
+                        <div className="label">No backup yet</div>
+                        <div className="value">{plan.no_snapshot_count ?? 0}</div>
                       </div>
                       <div className="stat">
                         <div className="label">Eligible to test</div>

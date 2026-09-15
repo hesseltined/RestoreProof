@@ -1,9 +1,9 @@
 /**
- * Purpose: SMTP presets + notification templates.
+ * Purpose: SMTP presets, push (ntfy) delivery, and notification templates.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-12
- * Version: 1.4.0
+ * Modified: 2026-07-31
+ * Version: 1.7.0
  */
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
@@ -45,11 +45,60 @@ type AppSettings = {
   email_failure_body: string;
 };
 
+type Push = {
+  enabled: boolean;
+  provider: string;
+  url: string;
+  verify_ssl: boolean;
+  on_success: boolean;
+  on_failure: boolean;
+  token_set: boolean;
+  push_ok_at?: string | null;
+};
+
+type Heartbeat = {
+  enabled: boolean;
+  url: string;
+  interval_seconds: number;
+  verify_ssl: boolean;
+  last_ping_at?: string | null;
+  last_error: string;
+};
+
+/** Random topic name so an unauthenticated public ntfy topic stays private. */
+function suggestTopic(): string {
+  const rand = Math.random().toString(36).slice(2, 10);
+  return `https://ntfy.sh/restoreproof-${rand}`;
+}
+
+type Note = { tone: "ok" | "err"; text: string } | null;
+
+function CardNote({ note }: { note: Note }) {
+  if (!note) return null;
+  return <p className={note.tone === "ok" ? "success" : "error"}>{note.text}</p>;
+}
+
+function formatWhen(iso: string | null | undefined): string {
+  if (!iso) return "never";
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
+}
+
 export function NotificationsPage() {
   const [presets, setPresets] = useState<Preset[]>([]);
   const [smtp, setSmtp] = useState<Smtp | null>(null);
   const [password, setPassword] = useState("");
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [push, setPush] = useState<Push | null>(null);
+  const [pushToken, setPushToken] = useState("");
+  const [beat, setBeat] = useState<Heartbeat | null>(null);
+  // Card-scoped feedback: a message at the top of the page is off-screen while
+  // you are working in a card further down.
+  const [pushNote, setPushNote] = useState<Note>(null);
+  const [beatNote, setBeatNote] = useState<Note>(null);
   const [testTo, setTestTo] = useState("");
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
@@ -59,11 +108,15 @@ export function NotificationsPage() {
       api<Preset[]>("/smtp/presets"),
       api<Smtp>("/smtp"),
       api<AppSettings>("/settings"),
+      api<Push>("/push"),
+      api<Heartbeat>("/heartbeat"),
     ])
-      .then(([p, s, a]) => {
+      .then(([p, s, a, pu, hb]) => {
         setPresets(p);
         setSmtp(s);
         setSettings(a);
+        setPush(pu);
+        setBeat(hb);
         setTestTo(a.notify_to.split(",")[0] || "");
       })
       .catch((e) => setError(e.message));
@@ -139,12 +192,105 @@ export function NotificationsPage() {
     }
   }
 
-  if (!smtp || !settings) return <p className="help">Loading…</p>;
+  /** Persist the form. The test endpoints read saved settings, so tests save first. */
+  async function persistPush(current: Push): Promise<Push> {
+    const body = { ...current, token: pushToken || undefined };
+    const updated = await api<Push>("/push", { method: "PUT", body: JSON.stringify(body) });
+    setPush(updated);
+    setPushToken("");
+    return updated;
+  }
+
+  async function savePush(e: FormEvent) {
+    e.preventDefault();
+    if (!push) return;
+    setPushNote(null);
+    try {
+      const updated = await persistPush(push);
+      setPushNote({
+        tone: "ok",
+        text:
+          updated.enabled && !updated.url.trim()
+            ? "Saved. Add a topic URL to start receiving pushes."
+            : "Push settings saved.",
+      });
+    } catch (err) {
+      setPushNote({ tone: "err", text: err instanceof Error ? err.message : "Save failed" });
+    }
+  }
+
+  async function sendPushTest() {
+    if (!push) return;
+    setPushNote(null);
+    try {
+      await persistPush(push);
+      await api("/push/test", { method: "POST" });
+      setPush((p) => (p ? { ...p, push_ok_at: new Date().toISOString() } : p));
+      setPushNote({ tone: "ok", text: "Saved and test push sent — check your phone." });
+    } catch (err) {
+      setPushNote({
+        tone: "err",
+        text: err instanceof Error ? err.message : "Push test failed",
+      });
+    }
+  }
+
+  async function persistBeat(current: Heartbeat): Promise<Heartbeat> {
+    const updated = await api<Heartbeat>("/heartbeat", {
+      method: "PUT",
+      body: JSON.stringify(current),
+    });
+    setBeat(updated);
+    return updated;
+  }
+
+  async function saveBeat(e: FormEvent) {
+    e.preventDefault();
+    if (!beat) return;
+    setBeatNote(null);
+    try {
+      const updated = await persistBeat(beat);
+      setBeatNote({
+        tone: "ok",
+        text:
+          updated.enabled && !updated.url.trim()
+            ? "Saved. Add a ping URL to start sending heartbeats."
+            : "Heartbeat settings saved.",
+      });
+    } catch (err) {
+      setBeatNote({ tone: "err", text: err instanceof Error ? err.message : "Save failed" });
+    }
+  }
+
+  async function sendBeatTest() {
+    if (!beat) return;
+    setBeatNote(null);
+    try {
+      await persistBeat(beat);
+      await api("/heartbeat/test", { method: "POST" });
+      setBeat(await api<Heartbeat>("/heartbeat"));
+      setBeatNote({
+        tone: "ok",
+        text: "Saved and ping delivered — your monitor should show a heartbeat.",
+      });
+    } catch (err) {
+      setBeatNote({ tone: "err", text: err instanceof Error ? err.message : "Ping failed" });
+      try {
+        setBeat(await api<Heartbeat>("/heartbeat"));
+      } catch {
+        /* keep the existing view if the refresh also fails */
+      }
+    }
+  }
+
+  if (!smtp || !settings || !push || !beat) return <p className="help">Loading…</p>;
 
   return (
     <div>
       <h1 className="page-title">Notifications</h1>
-      <p className="page-sub">SMTP delivery with provider presets. Webhooks coming later.</p>
+      <p className="page-sub">
+        Email via SMTP with provider presets, plus free phone push notifications via ntfy.
+      </p>
       {msg && <p className="success">{msg}</p>}
       {error && <p className="error">{error}</p>}
 
@@ -269,6 +415,195 @@ export function NotificationsPage() {
           </div>
         </form>
       </div>
+
+      <form className="card" onSubmit={savePush}>
+        <h3 style={{ marginTop: 0 }}>Phone push notifications (ntfy)</h3>
+        <p className="help" style={{ marginTop: 0 }}>
+          Free alternative to SMS. Install the{" "}
+          <a href="https://ntfy.sh/app" target="_blank" rel="noreferrer">
+            ntfy app
+          </a>{" "}
+          on your phone, subscribe to the topic below, and restore results arrive as push
+          notifications that open straight to the run. Anyone who knows a public topic name can
+          read it, so keep the random suffix or self-host with an access token.
+        </p>
+        <label>
+          <input
+            type="checkbox"
+            checked={push.enabled}
+            onChange={(e) => setPush({ ...push, enabled: e.target.checked })}
+          />{" "}
+          Send push notifications
+        </label>
+        <div className="field" style={{ marginTop: "1rem" }}>
+          <label>Topic URL</label>
+          <div className="row-actions">
+            <input
+              placeholder="https://ntfy.sh/restoreproof-4f2b9c"
+              value={push.url}
+              onChange={(e) => setPush({ ...push, url: e.target.value })}
+              style={{ flex: 1, minWidth: "260px" }}
+            />
+            <button
+              className="btn small secondary"
+              type="button"
+              onClick={() => setPush({ ...push, url: suggestTopic() })}
+            >
+              Generate
+            </button>
+          </div>
+          <p className="help">
+            {push.url ? (
+              <>
+                Subscribe to this topic in the ntfy app, then save and send a test.{" "}
+                {push.push_ok_at ? "Last test delivered successfully." : "Not tested yet."}
+              </>
+            ) : (
+              <>Click Generate for a private random topic, or paste your own ntfy topic URL.</>
+            )}
+          </p>
+        </div>
+        <div className="field">
+          <label>
+            Access token {push.token_set ? "(set — blank keeps it, “-” clears it)" : "(optional)"}
+          </label>
+          <input
+            type="password"
+            placeholder="tk_… for protected or self-hosted topics"
+            value={pushToken}
+            onChange={(e) => setPushToken(e.target.value)}
+          />
+        </div>
+        <div className="row-actions" style={{ marginBottom: "1rem" }}>
+          <label>
+            <input
+              type="checkbox"
+              checked={push.on_failure}
+              onChange={(e) => setPush({ ...push, on_failure: e.target.checked })}
+            />{" "}
+            Push on failure
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={push.on_success}
+              onChange={(e) => setPush({ ...push, on_success: e.target.checked })}
+            />{" "}
+            Push on success
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={push.verify_ssl}
+              onChange={(e) => setPush({ ...push, verify_ssl: e.target.checked })}
+            />{" "}
+            Verify TLS
+          </label>
+        </div>
+        <CardNote note={pushNote} />
+        <div className="row-actions">
+          <button className="btn" type="submit">
+            Save push settings
+          </button>
+          <button
+            className="btn secondary"
+            type="button"
+            disabled={!push.url.trim()}
+            title={
+              push.url.trim()
+                ? "Publish a test notification to the topic"
+                : "Add a topic URL first"
+            }
+            onClick={sendPushTest}
+          >
+            Send test push
+          </button>
+        </div>
+        {!push.url.trim() && (
+          <p className="help">Add a topic URL to enable testing. Sending a test also saves.</p>
+        )}
+      </form>
+
+      <form className="card" onSubmit={saveBeat}>
+        <h3 style={{ marginTop: 0 }}>Worker heartbeat (dead-man's switch)</h3>
+        <p className="help" style={{ marginTop: 0 }}>
+          Alerts above only fire while RestoreProof is running — a stopped worker looks exactly
+          like “no failures”. The worker pings this URL after every healthy loop; your monitor
+          raises the alarm when the pings stop. Works with an Uptime Kuma <strong>Push</strong>
+          {" "}monitor, Healthchecks.io, or Cronitor. Set the monitor's expected interval a little
+          longer than the value below.
+        </p>
+        <label>
+          <input
+            type="checkbox"
+            checked={beat.enabled}
+            onChange={(e) => setBeat({ ...beat, enabled: e.target.checked })}
+          />{" "}
+          Send heartbeat pings
+        </label>
+        <div className="field" style={{ marginTop: "1rem" }}>
+          <label>Ping URL</label>
+          <input
+            placeholder="http://192.168.1.10:3001/api/push/AbC123"
+            value={beat.url}
+            onChange={(e) => setBeat({ ...beat, url: e.target.value })}
+          />
+          <p className="help">
+            In Uptime Kuma: add a monitor, set type to <strong>Push</strong>, then copy its push
+            URL. Use the monitor's host address and port — a container name only resolves if it
+            shares a Docker network with RestoreProof, which separate stacks do not.
+          </p>
+        </div>
+        <div className="field">
+          <label>Ping every (seconds)</label>
+          <input
+            type="number"
+            min={30}
+            max={86400}
+            value={beat.interval_seconds}
+            onChange={(e) =>
+              setBeat({ ...beat, interval_seconds: Number(e.target.value) || 300 })
+            }
+          />
+        </div>
+        <div className="row-actions" style={{ marginBottom: "1rem" }}>
+          <label>
+            <input
+              type="checkbox"
+              checked={beat.verify_ssl}
+              onChange={(e) => setBeat({ ...beat, verify_ssl: e.target.checked })}
+            />{" "}
+            Verify TLS
+          </label>
+        </div>
+        <p className="help">
+          Last successful ping: <strong>{formatWhen(beat.last_ping_at)}</strong>
+          {beat.last_error ? (
+            <>
+              {" "}
+              · last error: <span className="error">{beat.last_error}</span>
+            </>
+          ) : null}
+        </p>
+        <CardNote note={beatNote} />
+        <div className="row-actions">
+          <button className="btn" type="submit">
+            Save heartbeat settings
+          </button>
+          <button
+            className="btn secondary"
+            type="button"
+            disabled={!beat.url.trim()}
+            title={beat.url.trim() ? "Ping the monitor now" : "Add a ping URL first"}
+            onClick={sendBeatTest}
+          >
+            Ping now
+          </button>
+        </div>
+        {!beat.url.trim() && (
+          <p className="help">Add a ping URL to enable testing. “Ping now” also saves.</p>
+        )}
+      </form>
 
       <form className="card" onSubmit={saveNotify}>
         <h3 style={{ marginTop: 0 }}>Email templates</h3>

@@ -2,8 +2,8 @@
 Purpose: SQLAlchemy ORM models for RestoreProof.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-12
-Version: 1.5.0
+Modified: 2026-07-31
+Version: 1.8.0
 """
 
 from __future__ import annotations
@@ -106,6 +106,48 @@ class SmtpSettings(Base):
     smtp_ok_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class PushSettings(Base):
+    """
+    Push notification delivery (ntfy). Separate from SMTP so either channel can
+    be configured, tested, and disabled on its own.
+    """
+
+    __tablename__ = "push_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    provider: Mapped[str] = mapped_column(String(64), default="ntfy")
+    # Full topic URL, e.g. https://ntfy.sh/restoreproof-4f2b9c
+    url: Mapped[str] = mapped_column(String(512), default="")
+    # Optional access token for protected/self-hosted topics
+    token_enc: Mapped[str] = mapped_column(Text, default="")
+    verify_ssl: Mapped[bool] = mapped_column(Boolean, default=True)
+    on_success: Mapped[bool] = mapped_column(Boolean, default=False)
+    on_failure: Mapped[bool] = mapped_column(Boolean, default=True)
+    push_ok_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class HeartbeatSettings(Base):
+    """
+    Dead-man's-switch ping. The worker calls ``url`` after each healthy loop;
+    an external monitor (Uptime Kuma push, Healthchecks.io, Cronitor) raises the
+    alarm when the pings stop — which is the only way to catch a dead worker,
+    since a silent worker looks identical to "no failures".
+    """
+
+    __tablename__ = "heartbeat_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    url: Mapped[str] = mapped_column(String(512), default="")
+    interval_seconds: Mapped[int] = mapped_column(Integer, default=300)
+    verify_ssl: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_ping_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error: Mapped[str] = mapped_column(Text, default="")
+
+
 class ProxmoxHost(Base):
     __tablename__ = "proxmox_hosts"
 
@@ -149,6 +191,17 @@ class Guest(Base):
     memory_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)  # maxmem
     disk_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)  # maxdisk
     excluded: Mapped[bool] = mapped_column(Boolean, default=False)
+    # True when VMID appears in a Proxmox vzdump/backup job (refreshed on host sync)
+    in_backup_job: Mapped[bool] = mapped_column(Boolean, default=True)
+    # At least one covering job is currently enabled
+    backup_job_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Comma-separated job ids / schedules for UI (e.g. "backup-abc (sun 01:00)")
+    backup_job_summary: Mapped[str] = mapped_column(String(512), default="")
+    # PBS snapshot inventory seen at last host sync
+    backup_snapshot_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_backup_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     schedule_cron: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     schedule_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     last_tested_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

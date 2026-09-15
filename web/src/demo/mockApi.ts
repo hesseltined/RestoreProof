@@ -2,8 +2,8 @@
  * Purpose: Client-side mock API for RestoreProof /demo (no backend, no login).
  * Author: Doug Hesseltine
  * Created: 2026-07-13
- * Modified: 2026-07-22
- * Version: 2.0.0
+ * Modified: 2026-07-31
+ * Version: 2.5.0
  */
 
 import { APP_VERSION } from "../version";
@@ -19,6 +19,8 @@ import {
   type DemoHost,
   type DemoRun,
   type DemoSettings,
+  type DemoHeartbeat,
+  type DemoPush,
   type DemoSmtp,
   type DemoUser,
 } from "./store";
@@ -108,6 +110,22 @@ function queueRunForGuest(
   }
   const guest = store.guests.find((g) => g.id === guestId);
   if (!guest) return { error: { status: 404, detail: "Guest not found" } };
+  if (!guest.in_backup_job) {
+    return {
+      error: {
+        status: 400,
+        detail: `VMID ${guest.vmid} (${guest.name}) is not listed in any Proxmox backup job.`,
+      },
+    };
+  }
+  if (!guest.backup_snapshot_count) {
+    return {
+      error: {
+        status: 400,
+        detail: `No PBS backup exists yet for VMID ${guest.vmid} (${guest.name}).`,
+      },
+    };
+  }
   const run: DemoRun = {
     id: store.nextRunId++,
     guest_id: guest.id,
@@ -254,7 +272,9 @@ export async function demoApiFetch(path: string, options: RequestInit = {}): Pro
 
   // Dashboard / settings / schedule
   if (method === "GET" && clean === "/dashboard") {
-    return json(buildDashboard());
+    const raw = query.get("recent_limit");
+    const limit = raw === null ? 10 : Math.max(0, Math.min(500, Number(raw) || 0));
+    return json(buildDashboard(limit));
   }
   if (method === "GET" && clean === "/settings") {
     return json(store.settings);
@@ -281,6 +301,33 @@ export async function demoApiFetch(path: string, options: RequestInit = {}): Pro
     store.runs = store.runs.filter((r) => new Date(r.created_at).getTime() >= before);
     return json({ deleted: beforeCount - store.runs.length, before: body?.before });
   }
+  if (method === "POST" && clean === "/settings/purge-stale-runs") {
+    const orphaned = body?.orphaned !== false;
+    const notBackedUp = body?.not_backed_up !== false;
+    let orphanedDeleted = 0;
+    let notBackedDeleted = 0;
+    const keep: typeof store.runs = [];
+    const notBackedIds = new Set(
+      store.guests.filter((g) => !g.in_backup_job).map((g) => g.id)
+    );
+    for (const r of store.runs) {
+      if (orphaned && r.guest_id == null) {
+        orphanedDeleted += 1;
+        continue;
+      }
+      if (notBackedUp && r.guest_id != null && notBackedIds.has(r.guest_id)) {
+        notBackedDeleted += 1;
+        continue;
+      }
+      keep.push(r);
+    }
+    store.runs = keep;
+    return json({
+      deleted: orphanedDeleted + notBackedDeleted,
+      orphaned_deleted: orphanedDeleted,
+      not_backed_up_deleted: notBackedDeleted,
+    });
+  }
   if (method === "GET" && clean === "/schedule/plan") {
     return json(buildSchedulePlan());
   }
@@ -305,6 +352,35 @@ export async function demoApiFetch(path: string, options: RequestInit = {}): Pro
   }
   if (method === "POST" && clean === "/smtp/test") {
     return json({ ok: true, detail: "Demo mode — no email was sent." });
+  }
+
+  // Push (ntfy)
+  if (method === "GET" && clean === "/push") {
+    return json(store.push);
+  }
+  if (method === "PUT" && clean === "/push") {
+    const { token, ...rest } = { ...(body || {}) } as Partial<DemoPush> & { token?: string };
+    Object.assign(store.push, rest);
+    if (token) store.push.token_set = token.trim() !== "-";
+    return json(store.push);
+  }
+  if (method === "POST" && clean === "/push/test") {
+    store.push.push_ok_at = new Date().toISOString();
+    return json({ ok: true, detail: "Demo mode — no push was sent." });
+  }
+
+  // Worker heartbeat
+  if (method === "GET" && clean === "/heartbeat") {
+    return json(store.heartbeat);
+  }
+  if (method === "PUT" && clean === "/heartbeat") {
+    Object.assign(store.heartbeat, (body || {}) as Partial<DemoHeartbeat>);
+    return json(store.heartbeat);
+  }
+  if (method === "POST" && clean === "/heartbeat/test") {
+    store.heartbeat.last_ping_at = new Date().toISOString();
+    store.heartbeat.last_error = "";
+    return json({ ok: true, detail: "Demo mode — no ping was sent." });
   }
 
   // Users

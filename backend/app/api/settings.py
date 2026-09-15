@@ -2,19 +2,20 @@
 Purpose: App settings, SMTP, dashboard, users list, setup progress endpoints.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-22
-Version: 1.5.0
+Modified: 2026-07-31
+Version: 1.10.0
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
 from app.api.guests import _guest_out
+from app.config import get_settings
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import Guest, ProxmoxHost, RestoreRun, User
@@ -23,8 +24,14 @@ from app.schemas import (
     AppSettingsOut,
     AppSettingsUpdate,
     DashboardOut,
+    HeartbeatOut,
+    HeartbeatUpdate,
     PurgeRunsOut,
     PurgeRunsRequest,
+    PurgeStaleRunsOut,
+    PurgeStaleRunsRequest,
+    PushOut,
+    PushUpdate,
     RunOut,
     SchedulePlanOut,
     SetupProgressOut,
@@ -36,11 +43,18 @@ from app.schemas import (
 )
 from app.security import decrypt_secret, encrypt_secret, hash_password
 from app.services import locks
-from app.services.bootstrap import get_app_settings, get_smtp_settings
+from app.services.bootstrap import (
+    get_app_settings,
+    get_heartbeat_settings,
+    get_push_settings,
+    get_smtp_settings,
+)
 from app.services.email_templates import apply_default_templates
+from app.services.heartbeat import HeartbeatConfigError, send_heartbeat, validate_url
 from app.services.mailer import apply_preset_defaults, send_email
+from app.services.pusher import PushConfigError, send_push, split_topic_url
 from app.services.remediation import remediation_for_runs, run_out_with_remediation
-from app.services.retention import purge_runs_before
+from app.services.retention import purge_runs_before, purge_stale_runs
 from app.services.scheduler import build_schedule_plan, pick_next_guest, refresh_guest_due_times
 from app.services.smtp_presets import list_presets
 
@@ -63,6 +77,12 @@ def _secrets_health(db: Session) -> tuple[bool, str | None]:
             decrypt_secret(smtp.password_enc)
         except ValueError:
             broken.append("SMTP password")
+    push = get_push_settings(db)
+    if push.token_enc:
+        try:
+            decrypt_secret(push.token_enc)
+        except ValueError:
+            broken.append("push access token")
     if not broken:
         return False, None
     detail = (
@@ -147,6 +167,28 @@ def purge_runs(
     return PurgeRunsOut(deleted=deleted, before=before)
 
 
+@router.post("/settings/purge-stale-runs", response_model=PurgeStaleRunsOut)
+def purge_stale(
+    body: PurgeStaleRunsRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> PurgeStaleRunsOut:
+    """Admin: delete runs for removed guests and/or guests not in a backup job."""
+    if not body.orphaned and not body.not_backed_up:
+        raise HTTPException(
+            status_code=400,
+            detail="Select at least one category: orphaned and/or not_backed_up",
+        )
+    total, orphaned_n, not_backed_n = purge_stale_runs(
+        db, orphaned=body.orphaned, not_backed_up=body.not_backed_up
+    )
+    return PurgeStaleRunsOut(
+        deleted=total,
+        orphaned_deleted=orphaned_n,
+        not_backed_up_deleted=not_backed_n,
+    )
+
+
 @router.get("/schedule/plan", response_model=SchedulePlanOut)
 def schedule_plan(
     db: Session = Depends(get_db), _: User = Depends(get_current_user)
@@ -207,6 +249,129 @@ async def test_smtp(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     s = get_smtp_settings(db)
     s.smtp_ok_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"ok": True}
+
+
+def _push_out(p) -> PushOut:
+    return PushOut(
+        enabled=p.enabled,
+        provider=p.provider,
+        url=p.url,
+        verify_ssl=p.verify_ssl,
+        on_success=p.on_success,
+        on_failure=p.on_failure,
+        token_set=bool(p.token_enc),
+        push_ok_at=p.push_ok_at,
+    )
+
+
+@router.get("/push", response_model=PushOut)
+def read_push(db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> PushOut:
+    return _push_out(get_push_settings(db))
+
+
+@router.put("/push", response_model=PushOut)
+def update_push(
+    body: PushUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> PushOut:
+    p = get_push_settings(db)
+    data = body.model_dump(exclude_unset=True)
+    token = data.pop("token", None)
+
+    # Only a malformed URL is worth rejecting. Enabling before a topic exists is a
+    # normal in-progress state — it saves, and _push_run simply sends nothing.
+    if data.get("url"):
+        try:
+            split_topic_url(data["url"])
+        except PushConfigError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    for key, value in data.items():
+        if value is not None:
+            setattr(p, key, value)
+    if token is not None:
+        # "-" clears a stored token; blank leaves it untouched.
+        if token.strip() == "-":
+            p.token_enc = ""
+        elif token.strip():
+            p.token_enc = encrypt_secret(token.strip())
+        p.push_ok_at = None
+    db.commit()
+    return _push_out(p)
+
+
+@router.post("/push/test")
+async def test_push(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    app_settings = get_app_settings(db)
+    try:
+        await send_push(
+            db,
+            title=f"{app_settings.branding_title} test",
+            message="Push notifications are working. Restore test alerts will arrive here.",
+            priority="default",
+            tags=["bell"],
+            click_url=get_settings().app_base_url.rstrip("/"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        p = get_push_settings(db)
+        p.push_ok_at = None
+        db.commit()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    p = get_push_settings(db)
+    p.push_ok_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/heartbeat", response_model=HeartbeatOut)
+def read_heartbeat(
+    db: Session = Depends(get_db), _: User = Depends(get_current_user)
+) -> HeartbeatOut:
+    return HeartbeatOut.model_validate(get_heartbeat_settings(db))
+
+
+@router.put("/heartbeat", response_model=HeartbeatOut)
+def update_heartbeat(
+    body: HeartbeatUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> HeartbeatOut:
+    h = get_heartbeat_settings(db)
+    data = body.model_dump(exclude_unset=True)
+    # As with push: reject only a malformed URL, never an incomplete draft.
+    if data.get("url"):
+        try:
+            data["url"] = validate_url(data["url"])
+        except HeartbeatConfigError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    for key, value in data.items():
+        if value is not None:
+            setattr(h, key, value)
+    db.commit()
+    return HeartbeatOut.model_validate(h)
+
+
+@router.post("/heartbeat/test")
+def test_heartbeat(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    """Ping now regardless of interval, and record the outcome."""
+    h = get_heartbeat_settings(db)
+    try:
+        send_heartbeat(db)
+    except Exception as exc:  # noqa: BLE001
+        h.last_error = str(exc)[:500]
+        db.commit()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    h.last_ping_at = datetime.now(timezone.utc)
+    h.last_error = ""
     db.commit()
     return {"ok": True}
 
@@ -350,12 +515,19 @@ def setup_wizard_reopen(
 
 
 @router.get("/dashboard", response_model=DashboardOut)
-def dashboard(db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> DashboardOut:
+def dashboard(
+    recent_limit: int = Query(
+        10, ge=0, le=500, description="Recent runs to return; 0 returns all"
+    ),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> DashboardOut:
     settings = get_app_settings(db)
     lock = locks.get_lock(db)
-    recent = (
-        db.query(RestoreRun).order_by(RestoreRun.created_at.desc()).limit(10).all()
-    )
+    recent_query = db.query(RestoreRun).order_by(RestoreRun.created_at.desc())
+    if recent_limit:
+        recent_query = recent_query.limit(recent_limit)
+    recent = recent_query.all()
     remediated_by = remediation_for_runs(db, recent)
     active = (
         db.query(RestoreRun)
@@ -400,6 +572,7 @@ def dashboard(db: Session = Depends(get_db), _: User = Depends(get_current_user)
         lock_held_by=lock.held_by,
         lock_run_id=lock.run_id,
         recent_runs=[run_out_with_remediation(r, remediated_by) for r in recent],
+        recent_runs_total=db.query(RestoreRun).count(),
         guest_count=db.query(Guest).count(),
         excluded_count=db.query(Guest).filter(Guest.excluded.is_(True)).count(),
         host_count=db.query(ProxmoxHost).count(),

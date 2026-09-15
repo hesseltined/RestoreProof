@@ -2,8 +2,8 @@
 Purpose: Export and import RestoreProof configuration for VM rebuild or migration.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-12
-Version: 1.0.1
+Modified: 2026-07-31
+Version: 1.2.0
 """
 
 from __future__ import annotations
@@ -15,7 +15,12 @@ from typing import Any, Literal
 from sqlalchemy.orm import Session
 
 from app.models import Guest, ProxmoxHost, RestoreRun, User
-from app.services.bootstrap import get_app_settings, get_smtp_settings
+from app.services.bootstrap import (
+    get_app_settings,
+    get_heartbeat_settings,
+    get_push_settings,
+    get_smtp_settings,
+)
 from app.services.scheduler import refresh_guest_due_times
 from app.services.ssh_keys import generate_host_ssh_key, host_key_paths
 
@@ -53,6 +58,23 @@ SMTP_SETTINGS_FIELDS = (
     "password_enc",
     "from_email",
     "from_name",
+)
+
+HEARTBEAT_SETTINGS_FIELDS = (
+    "enabled",
+    "url",
+    "interval_seconds",
+    "verify_ssl",
+)
+
+PUSH_SETTINGS_FIELDS = (
+    "enabled",
+    "provider",
+    "url",
+    "token_enc",
+    "verify_ssl",
+    "on_success",
+    "on_failure",
 )
 
 HOST_FIELDS = (
@@ -131,6 +153,8 @@ def assert_import_allowed(db: Session) -> None:
 def build_export_bundle(db: Session, *, include_users: bool = False) -> dict[str, Any]:
     settings = get_app_settings(db)
     smtp = get_smtp_settings(db)
+    push = get_push_settings(db)
+    heartbeat = get_heartbeat_settings(db)
     hosts = db.query(ProxmoxHost).order_by(ProxmoxHost.id).all()
 
     host_rows: list[dict[str, Any]] = []
@@ -179,6 +203,8 @@ def build_export_bundle(db: Session, *, include_users: bool = False) -> dict[str
         ),
         "app_settings": _row_dict(settings, APP_SETTINGS_FIELDS),
         "smtp_settings": _row_dict(smtp, SMTP_SETTINGS_FIELDS),
+        "push_settings": _row_dict(push, PUSH_SETTINGS_FIELDS),
+        "heartbeat_settings": _row_dict(heartbeat, HEARTBEAT_SETTINGS_FIELDS),
         "proxmox_hosts": host_rows,
         "guest_overrides": guest_overrides,
         "ssh_keys": ssh_keys,
@@ -232,6 +258,21 @@ def import_config_bundle(
         if field in smtp_data:
             setattr(smtp, field, smtp_data[field])
     smtp.smtp_ok_at = None
+
+    push_data = bundle.get("push_settings") or {}
+    push = get_push_settings(db)
+    for field in PUSH_SETTINGS_FIELDS:
+        if field in push_data:
+            setattr(push, field, push_data[field])
+    push.push_ok_at = None
+
+    hb_data = bundle.get("heartbeat_settings") or {}
+    heartbeat = get_heartbeat_settings(db)
+    for field in HEARTBEAT_SETTINGS_FIELDS:
+        if field in hb_data:
+            setattr(heartbeat, field, hb_data[field])
+    heartbeat.last_ping_at = None
+    heartbeat.last_error = ""
 
     ssh_keys: dict[str, dict[str, str]] = bundle.get("ssh_keys") or {}
     hosts_by_name: dict[str, ProxmoxHost] = {}

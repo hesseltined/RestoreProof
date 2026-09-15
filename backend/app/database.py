@@ -2,8 +2,8 @@
 Purpose: SQLAlchemy engine and session helpers.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-12
-Version: 1.5.0
+Modified: 2026-07-31
+Version: 1.7.0
 """
 
 from collections.abc import Generator
@@ -52,6 +52,11 @@ def ensure_schema() -> None:
         "ALTER TABLE restore_runs ADD COLUMN IF NOT EXISTS backups_attempted INTEGER DEFAULT 0",
         "ALTER TABLE restore_runs ADD COLUMN IF NOT EXISTS result_summary TEXT DEFAULT ''",
         "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS setup_wizard_completed BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE guests ADD COLUMN IF NOT EXISTS in_backup_job BOOLEAN DEFAULT TRUE",
+        "ALTER TABLE guests ADD COLUMN IF NOT EXISTS backup_job_enabled BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE guests ADD COLUMN IF NOT EXISTS backup_job_summary VARCHAR(512) DEFAULT ''",
+        "ALTER TABLE guests ADD COLUMN IF NOT EXISTS backup_snapshot_count INTEGER DEFAULT 0",
+        "ALTER TABLE guests ADD COLUMN IF NOT EXISTS last_backup_at TIMESTAMPTZ",
     ]
     with engine.begin() as conn:
         for stmt in statements:

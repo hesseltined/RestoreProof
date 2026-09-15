@@ -2,8 +2,8 @@
  * Purpose: SMTP presets, push (ntfy) delivery, and notification templates.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-31
- * Version: 1.7.0
+ * Modified: 2026-09-15
+ * Version: 1.8.0
  */
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
@@ -75,7 +75,11 @@ type Note = { tone: "ok" | "err"; text: string } | null;
 
 function CardNote({ note }: { note: Note }) {
   if (!note) return null;
-  return <p className={note.tone === "ok" ? "success" : "error"}>{note.text}</p>;
+  return (
+    <p className={note.tone === "ok" ? "test-flash" : "test-flash err"} role="status">
+      {note.text}
+    </p>
+  );
 }
 
 function formatWhen(iso: string | null | undefined): string {
@@ -97,8 +101,12 @@ export function NotificationsPage() {
   const [beat, setBeat] = useState<Heartbeat | null>(null);
   // Card-scoped feedback: a message at the top of the page is off-screen while
   // you are working in a card further down.
+  const [smtpNote, setSmtpNote] = useState<Note>(null);
   const [pushNote, setPushNote] = useState<Note>(null);
   const [beatNote, setBeatNote] = useState<Note>(null);
+  const [smtpBusy, setSmtpBusy] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [beatBusy, setBeatBusy] = useState(false);
   const [testTo, setTestTo] = useState("");
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
@@ -184,11 +192,23 @@ export function NotificationsPage() {
 
   async function sendTest() {
     setError("");
+    setSmtpNote(null);
+    setSmtpBusy(true);
     try {
       await api("/smtp/test", { method: "POST", body: JSON.stringify({ to_email: testTo }) });
-      setMsg("Test email sent.");
+      const updated = await api<Smtp>("/smtp");
+      setSmtp(updated);
+      setSmtpNote({
+        tone: "ok",
+        text: `Test email sent to ${testTo}. Check that inbox.`,
+      });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Test failed");
+      setSmtpNote({
+        tone: "err",
+        text: err instanceof Error ? err.message : "Test failed",
+      });
+    } finally {
+      setSmtpBusy(false);
     }
   }
 
@@ -222,16 +242,19 @@ export function NotificationsPage() {
   async function sendPushTest() {
     if (!push) return;
     setPushNote(null);
+    setPushBusy(true);
     try {
       await persistPush(push);
       await api("/push/test", { method: "POST" });
       setPush((p) => (p ? { ...p, push_ok_at: new Date().toISOString() } : p));
-      setPushNote({ tone: "ok", text: "Saved and test push sent — check your phone." });
+      setPushNote({ tone: "ok", text: "Test push sent. Check the ntfy app." });
     } catch (err) {
       setPushNote({
         tone: "err",
         text: err instanceof Error ? err.message : "Push test failed",
       });
+    } finally {
+      setPushBusy(false);
     }
   }
 
@@ -265,13 +288,14 @@ export function NotificationsPage() {
   async function sendBeatTest() {
     if (!beat) return;
     setBeatNote(null);
+    setBeatBusy(true);
     try {
       await persistBeat(beat);
       await api("/heartbeat/test", { method: "POST" });
       setBeat(await api<Heartbeat>("/heartbeat"));
       setBeatNote({
         tone: "ok",
-        text: "Saved and ping delivered — your monitor should show a heartbeat.",
+        text: "Ping sent. Your monitor should show a heartbeat.",
       });
     } catch (err) {
       setBeatNote({ tone: "err", text: err instanceof Error ? err.message : "Ping failed" });
@@ -280,6 +304,8 @@ export function NotificationsPage() {
       } catch {
         /* keep the existing view if the refresh also fails */
       }
+    } finally {
+      setBeatBusy(false);
     }
   }
 
@@ -405,14 +431,18 @@ export function NotificationsPage() {
               style={{ minWidth: "220px" }}
             />
             <button
-              className="btn secondary"
+              className={`btn ${smtpNote?.tone === "ok" && !smtpBusy ? "sent" : "secondary"}`}
               type="button"
-              disabled={!testTo}
+              disabled={!testTo || smtpBusy}
               onClick={sendTest}
             >
-              Send test
+              {smtpBusy ? "Sending…" : smtpNote?.tone === "ok" ? "Sent" : "Send test"}
             </button>
           </div>
+          <CardNote note={smtpNote} />
+          {smtp.smtp_ok_at && !smtpNote ? (
+            <p className="help">Last test email: {formatWhen(smtp.smtp_ok_at)}</p>
+          ) : null}
         </form>
       </div>
 
@@ -500,15 +530,14 @@ export function NotificationsPage() {
             Verify TLS
           </label>
         </div>
-        <CardNote note={pushNote} />
         <div className="row-actions">
           <button className="btn" type="submit">
             Save push settings
           </button>
           <button
-            className="btn secondary"
+            className={`btn ${pushNote?.tone === "ok" && !pushBusy ? "sent" : "secondary"}`}
             type="button"
-            disabled={!push.url.trim()}
+            disabled={!push.url.trim() || pushBusy}
             title={
               push.url.trim()
                 ? "Publish a test notification to the topic"
@@ -516,9 +545,10 @@ export function NotificationsPage() {
             }
             onClick={sendPushTest}
           >
-            Send test push
+            {pushBusy ? "Sending…" : pushNote?.tone === "ok" ? "Sent" : "Send test push"}
           </button>
         </div>
+        <CardNote note={pushNote} />
         {!push.url.trim() && (
           <p className="help">Add a topic URL to enable testing. Sending a test also saves.</p>
         )}
@@ -585,21 +615,21 @@ export function NotificationsPage() {
             </>
           ) : null}
         </p>
-        <CardNote note={beatNote} />
         <div className="row-actions">
           <button className="btn" type="submit">
             Save heartbeat settings
           </button>
           <button
-            className="btn secondary"
+            className={`btn ${beatNote?.tone === "ok" && !beatBusy ? "sent" : "secondary"}`}
             type="button"
-            disabled={!beat.url.trim()}
+            disabled={!beat.url.trim() || beatBusy}
             title={beat.url.trim() ? "Ping the monitor now" : "Add a ping URL first"}
             onClick={sendBeatTest}
           >
-            Ping now
+            {beatBusy ? "Sending…" : beatNote?.tone === "ok" ? "Sent" : "Ping now"}
           </button>
         </div>
+        <CardNote note={beatNote} />
         {!beat.url.trim() && (
           <p className="help">Add a ping URL to enable testing. “Ping now” also saves.</p>
         )}

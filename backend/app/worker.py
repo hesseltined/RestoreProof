@@ -2,12 +2,13 @@
 Purpose: Background worker — process queued restores, schedule rotation, retention.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-09-11
-Version: 1.7.0
+Modified: 2026-09-15
+Version: 1.8.0
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
@@ -17,6 +18,7 @@ from app.database import Base, SessionLocal, engine, ensure_schema
 from app.models import RestoreRun
 from app.services.bootstrap import ensure_defaults, get_app_settings
 from app.services.heartbeat import maybe_send_heartbeat
+from app.services.notifications import flush_schedule_digests, maybe_send_gap_alert
 from app.services.restore import (
     execute_restore_run,
     recover_orphaned_runs,
@@ -115,6 +117,11 @@ def maybe_enqueue_scheduled() -> None:
         db.close()
 
 
+async def _flush_alerts(db) -> None:
+    await flush_schedule_digests(db)
+    await maybe_send_gap_alert(db)
+
+
 def main() -> None:
     validate_runtime_secrets(get_settings(), role="worker")
     Base.metadata.create_all(bind=engine)
@@ -152,10 +159,10 @@ def main() -> None:
                         logger.warning("Swept %s leftover test guest(s)", swept)
                 finally:
                     db.close()
-            # Only ping after a clean iteration, so a crashing or DB-less worker
-            # goes quiet and the external monitor raises the alarm.
             db = SessionLocal()
             try:
+                # Flush held nightly mail, then gap-alert, then the dead-man ping.
+                asyncio.run(_flush_alerts(db))
                 maybe_send_heartbeat(db)
             finally:
                 db.close()

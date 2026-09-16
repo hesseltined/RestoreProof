@@ -2,8 +2,8 @@
 Purpose: Export and import RestoreProof configuration for VM rebuild or migration.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-31
-Version: 1.2.0
+Modified: 2026-09-15
+Version: 1.3.0
 """
 
 from __future__ import annotations
@@ -42,6 +42,8 @@ APP_SETTINGS_FIELDS = (
     "notify_on_failure",
     "notify_to",
     "notify_cc",
+    "gap_alert_enabled",
+    "gap_alert_hours",
     "email_success_subject",
     "email_failure_subject",
     "email_success_body",

@@ -2,8 +2,8 @@
 Purpose: Outbound push notifications via ntfy using stored push settings.
 Author: Doug Hesseltine
 Created: 2026-07-31
-Modified: 2026-07-31
-Version: 1.1.0
+Modified: 2026-09-15
+Version: 1.2.0
 """
 
 from __future__ import annotations
@@ -140,4 +140,47 @@ def build_run_push(run: RestoreRun, ctx: dict[str, Any]) -> dict[str, Any]:
         "priority": "high",
         "tags": tags,
         "click_url": run_url,
+    }
+
+
+def build_digest_push(runs: list[RestoreRun], *, failed: bool, click_url: str) -> dict[str, Any]:
+    n = len(runs)
+    names = ", ".join((r.source_name or f"VMID {r.source_vmid}") for r in runs[:8])
+    extra = f" (+{n - 8} more)" if n > 8 else ""
+    if failed:
+        title = f"RestoreProof: {n} failed restore test{'s' if n != 1 else ''}"
+        tags = ["rotating_light"]
+        first_err = (
+            (runs[0].error_message or runs[0].result_summary or "Restore test failed.")
+            if runs
+            else ""
+        )
+        message = f"{names}{extra}. {first_err}".strip()
+    else:
+        title = f"RestoreProof: {n} passed restore test{'s' if n != 1 else ''}"
+        tags = ["white_check_mark"]
+        message = f"{names}{extra}"
+    return {
+        "title": title,
+        "message": _shorten(message),
+        "priority": "high",
+        "tags": tags,
+        "click_url": click_url,
+    }
+
+
+def build_gap_push(payload: dict[str, Any], click_url: str) -> dict[str, Any]:
+    hours = payload.get("hours_since")
+    hours_label = f"{hours:.0f}h" if hours is not None else "the gap window"
+    eligible = int(payload.get("eligible") or 0)
+    last_guest = payload.get("last_guest") or "none"
+    return {
+        "title": f"RestoreProof: no restore tests in {hours_label}",
+        "message": _shorten(
+            f"Last restore: {last_guest}. Eligible guests: {eligible}. "
+            "Scheduler is on but nothing finished."
+        ),
+        "priority": "high",
+        "tags": ["hourglass"],
+        "click_url": click_url,
     }

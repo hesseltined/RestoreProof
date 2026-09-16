@@ -2,8 +2,8 @@
 Purpose: SQLAlchemy ORM models for RestoreProof.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-31
-Version: 1.8.0
+Modified: 2026-09-15
+Version: 1.9.0
 """
 
 from __future__ import annotations
@@ -74,6 +74,14 @@ class AppSettings(Base):
     notify_on_failure: Mapped[bool] = mapped_column(Boolean, default=True)
     notify_to: Mapped[str] = mapped_column(Text, default="")
     notify_cc: Mapped[str] = mapped_column(Text, default="")
+    # Email/push when the schedule is on but no restore finishes for N hours.
+    gap_alert_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    gap_alert_hours: Mapped[int] = mapped_column(Integer, default=26)
+    gap_alert_last_sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # One-shot flag for the notified_at backfill in ensure_schema. Not an API field.
+    notified_at_backfilled: Mapped[bool] = mapped_column(Boolean, default=True)
     email_success_subject: Mapped[str] = mapped_column(
         String(255), default="✅ RestoreProof passed — {{guest_name}} (VMID {{vmid}})"
     )
@@ -259,6 +267,11 @@ class RestoreRun(Base):
     log_text: Mapped[str] = mapped_column(Text, default="")
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set when email/push for this run was sent or skipped. Null = still waiting
+    # to be included in tonight's scheduled digest.
+    notified_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     guest: Mapped[Optional[Guest]] = relationship(back_populates="runs")

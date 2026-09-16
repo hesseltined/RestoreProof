@@ -7,4 +7,4 @@
  */
 
 /** Bump when shipping UI or API images so Portainer deploys are identifiable. */
-export const APP_VERSION = "1.6.2";
+export const APP_VERSION = "1.6.3";

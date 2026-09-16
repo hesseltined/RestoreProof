@@ -2,8 +2,8 @@
 Purpose: SQLAlchemy engine and session helpers.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-31
-Version: 1.7.0
+Modified: 2026-09-15
+Version: 1.8.0
 """
 
 from collections.abc import Generator
@@ -57,6 +57,22 @@ def ensure_schema() -> None:
         "ALTER TABLE guests ADD COLUMN IF NOT EXISTS backup_job_summary VARCHAR(512) DEFAULT ''",
         "ALTER TABLE guests ADD COLUMN IF NOT EXISTS backup_snapshot_count INTEGER DEFAULT 0",
         "ALTER TABLE guests ADD COLUMN IF NOT EXISTS last_backup_at TIMESTAMPTZ",
+        "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS gap_alert_enabled BOOLEAN DEFAULT TRUE",
+        "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS gap_alert_hours INTEGER DEFAULT 26",
+        "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS gap_alert_last_sent_at TIMESTAMPTZ",
+        "ALTER TABLE restore_runs ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ",
+        "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS notified_at_backfilled BOOLEAN DEFAULT FALSE",
+        # One-shot: mark pre-digest runs as already mailed so the first worker
+        # loop after upgrade does not dump history into a single digest.
+        """
+        UPDATE restore_runs AS r
+        SET notified_at = COALESCE(r.finished_at, r.created_at)
+        FROM app_settings AS s
+        WHERE r.notified_at IS NULL
+          AND r.status NOT IN ('queued', 'running')
+          AND COALESCE(s.notified_at_backfilled, FALSE) = FALSE
+        """,
+        "UPDATE app_settings SET notified_at_backfilled = TRUE",
     ]
     with engine.begin() as conn:
         for stmt in statements:

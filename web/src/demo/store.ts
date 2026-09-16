@@ -2,8 +2,8 @@
  * Purpose: In-memory sample fleet for the public RestoreProof /demo walkthrough.
  * Author: Doug Hesseltine
  * Created: 2026-07-13
- * Modified: 2026-07-31
- * Version: 2.5.0
+ * Modified: 2026-09-15
+ * Version: 2.6.0
  *
  * Three themed Proxmox hosts (Milky Way, Orion, Pizza Planet), 10–30 guests each,
  * ~90 days of weekly-ish restore history with occasional failures and remediations.
@@ -111,6 +111,9 @@ export type DemoSettings = {
   notify_on_failure: boolean;
   notify_to: string;
   notify_cc: string;
+  gap_alert_enabled: boolean;
+  gap_alert_hours: number;
+  gap_alert_last_sent_at: string | null;
   email_success_subject: string;
   email_failure_subject: string;
   email_success_body: string;
@@ -807,6 +810,9 @@ function createStore() {
     notify_on_failure: true,
     notify_to: "ops@acme.lab",
     notify_cc: "",
+    gap_alert_enabled: true,
+    gap_alert_hours: 26,
+    gap_alert_last_sent_at: null,
     email_success_subject: "✅ RestoreProof passed — {{guest_name}} (VMID {{vmid}})",
     email_failure_subject: "❌ RestoreProof failed — {{guest_name}} (VMID {{vmid}})",
     email_success_body: SUCCESS_BODY,

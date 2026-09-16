@@ -2,8 +2,8 @@
 Purpose: App settings, SMTP, dashboard, users list, setup progress endpoints.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-31
-Version: 1.10.0
+Modified: 2026-09-15
+Version: 1.11.0
 """
 
 from __future__ import annotations
@@ -130,6 +130,8 @@ def update_settings(
         data["schedule_coverage_goal"] = goal
     if "schedule_batch_size" in data and data["schedule_batch_size"] is not None:
         data["schedule_batch_size"] = max(1, min(500, int(data["schedule_batch_size"])))
+    if "gap_alert_hours" in data and data["gap_alert_hours"] is not None:
+        data["gap_alert_hours"] = max(1, min(168, int(data["gap_alert_hours"])))
     for key, value in data.items():
         setattr(settings, key, value)
     db.commit()

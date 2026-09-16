@@ -2,7 +2,7 @@
 # Author: Doug Hesseltine
 # Created: 2026-07-12
 # Modified: 2026-07-13
-# Version: 1.6.2
+# Version: 1.6.3
 #
 # In Portainer Environment variables, set EXACTLY these two names:
 #   SECRET_KEY

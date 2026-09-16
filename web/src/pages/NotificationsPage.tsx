@@ -3,7 +3,7 @@
  * Author: Doug Hesseltine
  * Created: 2026-07-12
  * Modified: 2026-09-15
- * Version: 1.8.0
+ * Version: 1.9.0
  */
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
@@ -39,6 +39,9 @@ type AppSettings = {
   notify_on_failure: boolean;
   notify_to: string;
   notify_cc: string;
+  gap_alert_enabled: boolean;
+  gap_alert_hours: number;
+  gap_alert_last_sent_at?: string | null;
   email_success_subject: string;
   email_failure_subject: string;
   email_success_body: string;
@@ -315,7 +318,8 @@ export function NotificationsPage() {
     <div>
       <h1 className="page-title">Notifications</h1>
       <p className="page-sub">
-        Email via SMTP with provider presets, plus free phone push notifications via ntfy.
+        SMTP and ntfy for restore results. A scheduled night sends one success digest and one
+        failure digest. A gap alert fires if the schedule is on and nothing finishes.
       </p>
       {msg && <p className="success">{msg}</p>}
       {error && <p className="error">{error}</p>}
@@ -636,11 +640,54 @@ export function NotificationsPage() {
       </form>
 
       <form className="card" onSubmit={saveNotify}>
+        <h3 style={{ marginTop: 0 }}>Restore gap alert</h3>
+        <p className="help" style={{ marginTop: 0 }}>
+          The heartbeat above only proves the worker process is running. This email and push fire
+          when the schedule is on and no restore test has finished for the hours below. 26 hours
+          catches a missed nightly tick.
+        </p>
+        <label>
+          <input
+            type="checkbox"
+            checked={settings.gap_alert_enabled !== false}
+            onChange={(e) =>
+              setSettings({ ...settings, gap_alert_enabled: e.target.checked })
+            }
+          />{" "}
+          Alert when scheduled restores go silent
+        </label>
+        <div className="field" style={{ marginTop: "1rem" }}>
+          <label>Hours without a restore</label>
+          <input
+            type="number"
+            min={1}
+            max={168}
+            value={settings.gap_alert_hours ?? 26}
+            onChange={(e) =>
+              setSettings({
+                ...settings,
+                gap_alert_hours: Math.max(1, Number(e.target.value) || 26),
+              })
+            }
+          />
+        </div>
+        <p className="help">
+          Last gap alert: <strong>{formatWhen(settings.gap_alert_last_sent_at)}</strong>
+        </p>
+        <div className="row-actions">
+          <button className="btn" type="submit">
+            Save gap alert
+          </button>
+        </div>
+      </form>
+
+      <form className="card" onSubmit={saveNotify}>
         <h3 style={{ marginTop: 0 }}>Email templates</h3>
         <p className="help" style={{ marginTop: 0 }}>
           HTML templates with inline styles. Use <code>{"{{proof_section}}"}</code> to embed VM
           console screenshots (QEMU) or container status proof (LXC). Proof is generated
-          automatically — you do not need different templates per guest type.
+          automatically. Scheduled restores wait until that tick finishes, then send one success
+          report and one failure report as needed. Run now still mails immediately.
         </p>
         <h3 style={{ marginTop: "1.25rem" }}>When to notify</h3>
         <label>

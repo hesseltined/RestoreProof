@@ -3,7 +3,7 @@
 # Author: Doug Hesseltine
 # Created: 2026-07-12
 # Modified: 2026-09-15
-# Version: 1.6.2
+# Version: 1.6.3
 #
 # Builds linux/amd64 (Portainer / Proxmox Docker hosts) and pushes.
 # Does NOT run docker compose up / restart local containers.
@@ -13,7 +13,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="${VERSION:-1.6.2}"
+VERSION="${VERSION:-1.6.3}"
 PLATFORM="${PLATFORM:-linux/amd64}"
 REGISTRY_USER="${DOCKERHUB_USER:-yesitsmedoug}"
 IMAGE_API="${REGISTRY_USER}/restoreproof-api"

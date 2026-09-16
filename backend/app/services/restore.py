@@ -2,8 +2,8 @@
 Purpose: Full restore → boot → evidence → cleanup cycle for one guest.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-09-11
-Version: 1.15.0
+Modified: 2026-09-15
+Version: 1.16.0
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from app.services import locks
 from app.services.bootstrap import get_app_settings, get_push_settings
 from app.services.email_templates import build_notification_context, screenshot_attachment
 from app.services.mailer import parse_addr_list, send_email
+from app.services.notifications import schedule_digest_should_wait, send_schedule_digests
 from app.services.pusher import build_run_push, send_push
 from app.services.proxmox import (
     ProxmoxAPIError,
@@ -906,9 +907,23 @@ async def _push_run(db: Session, run: RestoreRun, ctx: dict) -> None:
         logger.exception("push failed")
 
 
-async def notify_run(db: Session, run: RestoreRun) -> None:
+async def notify_run(db: Session, run: RestoreRun, *, force: bool = False) -> None:
     # A skipped run means no backup was expected — never alert on it.
     if run.status == "skipped":
+        run.notified_at = datetime.now(timezone.utc)
+        db.commit()
+        return
+    if (
+        not force
+        and run.trigger == "schedule"
+        and run.status in ("success", "failed")
+        and schedule_digest_should_wait(db)
+    ):
+        _log(run, "Notification held until tonight's remaining restores finish")
+        db.commit()
+        return
+    if not force and run.trigger == "schedule" and run.status in ("success", "failed"):
+        await send_schedule_digests(db)
         return
     settings = get_app_settings(db)
     app_url = get_settings().app_base_url.rstrip("/")
@@ -916,6 +931,7 @@ async def notify_run(db: Session, run: RestoreRun) -> None:
     # Each channel decides independently, and neither can break the other.
     await _email_run(db, run, settings, ctx)
     await _push_run(db, run, ctx)
+    run.notified_at = datetime.now(timezone.utc)
     db.commit()
 
 

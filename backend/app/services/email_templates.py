@@ -2,8 +2,8 @@
 Purpose: Default notification templates and proof sections for restore emails.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-12
-Version: 1.1.0
+Modified: 2026-09-15
+Version: 1.2.0
 """
 
 from __future__ import annotations
@@ -252,6 +252,115 @@ def build_notification_context(run: RestoreRun, app_url: str) -> dict[str, Any]:
         "evidence_kind": run.evidence_kind or "none",
         "proof_section": proof_section,
     }
+
+
+def _digest_row(run: RestoreRun, app_url: str, *, failed: bool) -> str:
+    name = html.escape(run.source_name or "")
+    vmid = html.escape(str(run.source_vmid))
+    when = html.escape(format_timestamp(run.finished_at))
+    url = html.escape(f"{app_url.rstrip('/')}/runs/{run.id}")
+    raw = (
+        (run.error_message or run.result_summary or "")[:240]
+        if failed
+        else (run.result_summary or "Restored, booted, verified.")[:240]
+    )
+    detail = html.escape(raw)
+    return (
+        "<tr>"
+        f'<td style="padding:8px 0;border-bottom:1px solid #e2e8f0;"><strong>{name}</strong>'
+        f'<div style="font-size:12px;color:#64748b;">VMID {vmid} · {when}</div></td>'
+        f'<td style="padding:8px 0 8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;'
+        f'color:#334155;">{detail}</td>'
+        f'<td style="padding:8px 0 8px 12px;border-bottom:1px solid #e2e8f0;white-space:nowrap;">'
+        f'<a href="{url}" style="color:#0f766e;font-weight:600;text-decoration:none;">Open</a></td>'
+        "</tr>"
+    )
+
+
+def build_digest_email(
+    runs: list[RestoreRun],
+    app_url: str,
+    *,
+    failed: bool,
+) -> tuple[str, str]:
+    """One subject+HTML body covering a night's successes or failures."""
+    n = len(runs)
+    if failed:
+        subject = f"❌ RestoreProof: {n} failed restore test{'s' if n != 1 else ''}"
+        heading = f"{n} restore test{'s' if n != 1 else ''} failed"
+        intro = (
+            "These scheduled restore tests did not verify. Production guests were not changed."
+        )
+        header_bg = "linear-gradient(135deg,#b91c1c,#ef4444)"
+        btn_bg = "#b91c1c"
+    else:
+        subject = f"✅ RestoreProof: {n} passed restore test{'s' if n != 1 else ''}"
+        heading = f"{n} restore test{'s' if n != 1 else ''} passed"
+        intro = (
+            "Tonight's scheduled restores booted from PBS in throwaway test guests and passed."
+        )
+        header_bg = "linear-gradient(135deg,#047857,#10b981)"
+        btn_bg = "#0f766e"
+    rows = "".join(_digest_row(r, app_url, failed=failed) for r in runs)
+    dash = html.escape(app_url.rstrip("/"))
+    body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#eef2f6;font-family:Segoe UI,Helvetica,Arial,sans-serif;">
+  <div style="max-width:680px;margin:24px auto;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 8px 32px rgba(15,28,46,0.1);">
+    <div style="background:{header_bg};padding:28px 26px;color:#ffffff;">
+      <div style="font-size:12px;opacity:0.9;letter-spacing:0.08em;text-transform:uppercase;">RestoreProof</div>
+      <h1 style="margin:10px 0 0;font-size:24px;font-weight:700;line-height:1.3;">{html.escape(heading)}</h1>
+    </div>
+    <div style="padding:26px;color:#1e293b;line-height:1.65;font-size:15px;">
+      <p style="margin-top:0;">{html.escape(intro)}</p>
+      <table style="width:100%;border-collapse:collapse;margin:12px 0;font-size:14px;">
+        {rows}
+      </table>
+      <a href="{dash}" style="display:inline-block;margin-top:12px;padding:13px 22px;background:{btn_bg};color:#ffffff;text-decoration:none;border-radius:10px;font-weight:600;font-size:14px;">Open dashboard</a>
+    </div>
+  </div>
+</body>
+</html>"""
+    return subject, body
+
+
+def build_gap_alert_email(payload: dict[str, Any], app_url: str) -> tuple[str, str]:
+    """Subject+HTML when the schedule is on but no restore has finished recently."""
+    hours = payload.get("hours_since")
+    hours_label = f"{hours:.0f} hours" if hours is not None else "the configured window"
+    last_name = html.escape(str(payload.get("last_guest") or "none"))
+    last_when = html.escape(str(payload.get("last_finished") or "never"))
+    eligible = int(payload.get("eligible") or 0)
+    no_snap = int(payload.get("no_snapshot") or 0)
+    disabled_job = int(payload.get("disabled_job") or 0)
+    subject = "RestoreProof: no restore tests recently"
+    dash = html.escape(app_url.rstrip("/"))
+    body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#eef2f6;font-family:Segoe UI,Helvetica,Arial,sans-serif;">
+  <div style="max-width:620px;margin:24px auto;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 8px 32px rgba(15,28,46,0.1);">
+    <div style="background:linear-gradient(135deg,#b45309,#f59e0b);padding:28px 26px;color:#ffffff;">
+      <div style="font-size:12px;opacity:0.9;letter-spacing:0.08em;text-transform:uppercase;">RestoreProof</div>
+      <h1 style="margin:10px 0 0;font-size:24px;font-weight:700;line-height:1.3;">No restore test in {html.escape(hours_label)}</h1>
+    </div>
+    <div style="padding:26px;color:#1e293b;line-height:1.65;font-size:15px;">
+      <p style="margin-top:0;">The scheduler is on, but RestoreProof has not finished a restore test in {html.escape(hours_label)}. Check eligible guests, PBS reachability, and whether the vzdump job is enabled.</p>
+      <table style="width:100%;border-collapse:collapse;margin:18px 0;font-size:14px;">
+        <tr><td style="padding:7px 0;color:#64748b;width:42%;">Last restore</td><td style="padding:7px 0;"><strong>{last_name}</strong></td></tr>
+        <tr><td style="padding:7px 0;color:#64748b;">Finished</td><td style="padding:7px 0;">{last_when}</td></tr>
+        <tr><td style="padding:7px 0;color:#64748b;">Eligible guests</td><td style="padding:7px 0;"><strong>{eligible}</strong></td></tr>
+        <tr><td style="padding:7px 0;color:#64748b;">In a job, no PBS snapshot</td><td style="padding:7px 0;">{no_snap}</td></tr>
+        <tr><td style="padding:7px 0;color:#64748b;">Covered by a disabled job</td><td style="padding:7px 0;">{disabled_job}</td></tr>
+      </table>
+      <p style="font-size:14px;color:#475569;">Eligible 0 usually means PBS snapshots are missing or the covering backup job is disabled. Sync inventory after PBS is back.</p>
+      <a href="{dash}" style="display:inline-block;margin-top:8px;padding:13px 22px;background:#b45309;color:#ffffff;text-decoration:none;border-radius:10px;font-weight:600;font-size:14px;">Open dashboard</a>
+    </div>
+  </div>
+</body>
+</html>"""
+    return subject, body
 
 
 def html_to_plain(html: str) -> str:

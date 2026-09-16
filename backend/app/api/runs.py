@@ -2,8 +2,8 @@
 Purpose: Restore run history, evidence download, resend email, retry, pagination.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-31
-Version: 1.4.0
+Modified: 2026-09-15
+Version: 1.5.0
 """
 
 from __future__ import annotations
@@ -83,7 +83,7 @@ async def resend_email(
         raise HTTPException(status_code=404, detail="Run not found")
     if run.status not in ("success", "failed"):
         raise HTTPException(status_code=400, detail="Run is not finished")
-    await notify_run(db, run)
+    await notify_run(db, run, force=True)
     return {"ok": True}
 
 

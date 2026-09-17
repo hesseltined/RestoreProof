@@ -2,12 +2,15 @@
 Purpose: Ensure singleton settings rows exist.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-31
-Version: 1.3.0
+Modified: 2026-09-17
+Version: 1.4.0
 """
+
+from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models import AppSettings, HeartbeatSettings, JobLock, PushSettings, SmtpSettings
 from app.services.email_templates import (
     DEFAULT_FAILURE_BODY,
@@ -49,6 +52,16 @@ def ensure_defaults(db: Session) -> None:
 def get_app_settings(db: Session) -> AppSettings:
     ensure_defaults(db)
     return db.query(AppSettings).first()  # type: ignore[return-value]
+
+
+def public_app_url(settings: Optional[AppSettings] = None) -> str:
+    """URL for email/push Open links. Settings override APP_BASE_URL."""
+    stored = ""
+    if settings is not None:
+        stored = (settings.public_base_url or "").strip().rstrip("/")
+    if stored:
+        return stored
+    return get_settings().app_base_url.strip().rstrip("/")
 
 
 def get_smtp_settings(db: Session) -> SmtpSettings:

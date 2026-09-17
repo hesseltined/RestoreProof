@@ -2,8 +2,8 @@
  * Purpose: SMTP presets, push (ntfy) delivery, and notification templates.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-09-15
- * Version: 1.9.0
+ * Modified: 2026-09-17
+ * Version: 1.10.0
  */
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
@@ -39,6 +39,7 @@ type AppSettings = {
   notify_on_failure: boolean;
   notify_to: string;
   notify_cc: string;
+  public_base_url: string;
   gap_alert_enabled: boolean;
   gap_alert_hours: number;
   gap_alert_last_sent_at?: string | null;
@@ -318,8 +319,8 @@ export function NotificationsPage() {
     <div>
       <h1 className="page-title">Notifications</h1>
       <p className="page-sub">
-        SMTP and ntfy for restore results. A scheduled night sends one success digest and one
-        failure digest. A gap alert fires if the schedule is on and nothing finishes.
+        SMTP and ntfy for restore results. A scheduled night sends one report with passed and
+        failed restores color-coded. A gap alert fires if the schedule is on and nothing finishes.
       </p>
       {msg && <p className="success">{msg}</p>}
       {error && <p className="error">{error}</p>}
@@ -686,8 +687,8 @@ export function NotificationsPage() {
         <p className="help" style={{ marginTop: 0 }}>
           HTML templates with inline styles. Use <code>{"{{proof_section}}"}</code> to embed VM
           console screenshots (QEMU) or container status proof (LXC). Proof is generated
-          automatically. Scheduled restores wait until that tick finishes, then send one success
-          report and one failure report as needed. Run now still mails immediately.
+          automatically. Scheduled restores wait until that tick finishes, then send one report
+          with passed and failed rows color-coded. Run now still mails immediately.
         </p>
         <h3 style={{ marginTop: "1.25rem" }}>When to notify</h3>
         <label>
@@ -708,6 +709,18 @@ export function NotificationsPage() {
           Failure
         </label>
         <div className="field" style={{ marginTop: "1rem" }}>
+          <label>Public URL for email links</label>
+          <input
+            placeholder="https://restoreproof.technologist.services"
+            value={settings.public_base_url || ""}
+            onChange={(e) => setSettings({ ...settings, public_base_url: e.target.value })}
+          />
+          <p className="help">
+            Used for Open links in restore emails. Must be the live HTTPS URL, not localhost.
+            Leave blank to use the server <code>APP_BASE_URL</code> environment variable.
+          </p>
+        </div>
+        <div className="field">
           <label>To (comma-separated)</label>
           <input
             value={settings.notify_to}

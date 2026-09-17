@@ -111,6 +111,7 @@ export type DemoSettings = {
   notify_on_failure: boolean;
   notify_to: string;
   notify_cc: string;
+  public_base_url: string;
   gap_alert_enabled: boolean;
   gap_alert_hours: number;
   gap_alert_last_sent_at: string | null;
@@ -810,6 +811,7 @@ function createStore() {
     notify_on_failure: true,
     notify_to: "ops@acme.lab",
     notify_cc: "",
+    public_base_url: "https://restoreproof.technologist.services",
     gap_alert_enabled: true,
     gap_alert_hours: 26,
     gap_alert_last_sent_at: null,

@@ -2,8 +2,8 @@
 Purpose: Default notification templates and proof sections for restore emails.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-09-15
-Version: 1.2.0
+Modified: 2026-09-17
+Version: 1.3.0
 """
 
 from __future__ import annotations
@@ -254,6 +254,20 @@ def build_notification_context(run: RestoreRun, app_url: str) -> dict[str, Any]:
     }
 
 
+def _status_pill(*, failed: bool) -> str:
+    if failed:
+        return (
+            '<span style="display:inline-block;padding:4px 10px;border-radius:999px;'
+            "background:#dc2626;color:#ffffff;font-weight:700;font-size:11px;"
+            'letter-spacing:0.06em;">FAILED</span>'
+        )
+    return (
+        '<span style="display:inline-block;padding:4px 10px;border-radius:999px;'
+        "background:#16a34a;color:#ffffff;font-weight:700;font-size:11px;"
+        'letter-spacing:0.06em;">PASSED</span>'
+    )
+
+
 def _digest_row(run: RestoreRun, app_url: str, *, failed: bool) -> str:
     name = html.escape(run.source_name or "")
     vmid = html.escape(str(run.source_vmid))
@@ -265,43 +279,84 @@ def _digest_row(run: RestoreRun, app_url: str, *, failed: bool) -> str:
         else (run.result_summary or "Restored, booted, verified.")[:240]
     )
     detail = html.escape(raw)
+    accent = "#dc2626" if failed else "#16a34a"
     return (
         "<tr>"
-        f'<td style="padding:8px 0;border-bottom:1px solid #e2e8f0;"><strong>{name}</strong>'
+        f'<td style="padding:12px 0 12px 12px;border-bottom:1px solid #e2e8f0;'
+        f'border-left:5px solid {accent};vertical-align:top;">'
+        f"{_status_pill(failed=failed)}"
+        f'<div style="margin-top:6px;"><strong>{name}</strong></div>'
         f'<div style="font-size:12px;color:#64748b;">VMID {vmid} · {when}</div></td>'
-        f'<td style="padding:8px 0 8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;'
-        f'color:#334155;">{detail}</td>'
-        f'<td style="padding:8px 0 8px 12px;border-bottom:1px solid #e2e8f0;white-space:nowrap;">'
-        f'<a href="{url}" style="color:#0f766e;font-weight:600;text-decoration:none;">Open</a></td>'
+        f'<td style="padding:12px 0 12px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;'
+        f'color:#334155;vertical-align:top;">{detail}</td>'
+        f'<td style="padding:12px 0 12px 12px;border-bottom:1px solid #e2e8f0;'
+        'white-space:nowrap;vertical-align:top;">'
+        f'<a href="{url}" style="display:inline-block;padding:8px 14px;background:{accent};'
+        'color:#ffffff;font-weight:700;text-decoration:none;border-radius:8px;font-size:13px;">'
+        "Open</a></td>"
         "</tr>"
     )
+
+
+def _count_phrase(n: int, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
 
 
 def build_digest_email(
     runs: list[RestoreRun],
     app_url: str,
     *,
-    failed: bool,
+    failed: Optional[bool] = None,
 ) -> tuple[str, str]:
-    """One subject+HTML body covering a night's successes or failures."""
-    n = len(runs)
-    if failed:
-        subject = f"❌ RestoreProof: {n} failed restore test{'s' if n != 1 else ''}"
-        heading = f"{n} restore test{'s' if n != 1 else ''} failed"
-        intro = (
-            "These scheduled restore tests did not verify. Production guests were not changed."
-        )
-        header_bg = "linear-gradient(135deg,#b91c1c,#ef4444)"
-        btn_bg = "#b91c1c"
+    """One subject+HTML body for a night's restores. Mixed pass/fail uses both colors."""
+    if failed is True:
+        successes: list[RestoreRun] = []
+        failures = list(runs)
+    elif failed is False:
+        successes = list(runs)
+        failures = []
     else:
-        subject = f"✅ RestoreProof: {n} passed restore test{'s' if n != 1 else ''}"
-        heading = f"{n} restore test{'s' if n != 1 else ''} passed"
+        successes = [r for r in runs if r.status == "success"]
+        failures = [r for r in runs if r.status != "success"]
+    n_ok = len(successes)
+    n_bad = len(failures)
+    if n_ok and n_bad:
+        subject = f"RestoreProof: {n_ok} passed, {n_bad} failed"
+        heading = "Tonight's restore report"
         intro = (
-            "Tonight's scheduled restores booted from PBS in throwaway test guests and passed."
+            f"{_count_phrase(n_ok, 'restore test')} passed. "
+            f"{_count_phrase(n_bad, 'restore test')} failed. "
+            "Production guests were not changed."
         )
-        header_bg = "linear-gradient(135deg,#047857,#10b981)"
-        btn_bg = "#0f766e"
-    rows = "".join(_digest_row(r, app_url, failed=failed) for r in runs)
+        header_bg = "#0f172a"
+        btn_bg = "#0f172a"
+    elif n_bad:
+        subject = f"❌ RestoreProof: {n_bad} failed restore test{'s' if n_bad != 1 else ''}"
+        heading = f"{_count_phrase(n_bad, 'restore test')} failed"
+        intro = "These scheduled restore tests did not verify. Production guests were not changed."
+        header_bg = "#dc2626"
+        btn_bg = "#dc2626"
+    else:
+        subject = f"✅ RestoreProof: {n_ok} passed restore test{'s' if n_ok != 1 else ''}"
+        heading = f"{_count_phrase(n_ok, 'restore test')} passed"
+        intro = "Tonight's scheduled restores booted from PBS in throwaway test guests and passed."
+        header_bg = "#16a34a"
+        btn_bg = "#16a34a"
+    chips = ""
+    if n_ok and n_bad:
+        chips = (
+            '<table role="presentation" style="margin:14px 0 0;border-collapse:separate;'
+            'border-spacing:8px 0;"><tr>'
+            f'<td style="background:#16a34a;color:#ffffff;padding:6px 12px;border-radius:8px;'
+            f'font-weight:700;font-size:13px;">{n_ok} passed</td>'
+            f'<td style="background:#dc2626;color:#ffffff;padding:6px 12px;border-radius:8px;'
+            f'font-weight:700;font-size:13px;">{n_bad} failed</td>'
+            "</tr></table>"
+        )
+    rows = "".join(
+        [_digest_row(r, app_url, failed=False) for r in successes]
+        + [_digest_row(r, app_url, failed=True) for r in failures]
+    )
     dash = html.escape(app_url.rstrip("/"))
     body = f"""<!DOCTYPE html>
 <html>
@@ -311,6 +366,7 @@ def build_digest_email(
     <div style="background:{header_bg};padding:28px 26px;color:#ffffff;">
       <div style="font-size:12px;opacity:0.9;letter-spacing:0.08em;text-transform:uppercase;">RestoreProof</div>
       <h1 style="margin:10px 0 0;font-size:24px;font-weight:700;line-height:1.3;">{html.escape(heading)}</h1>
+      {chips}
     </div>
     <div style="padding:26px;color:#1e293b;line-height:1.65;font-size:15px;">
       <p style="margin-top:0;">{html.escape(intro)}</p>

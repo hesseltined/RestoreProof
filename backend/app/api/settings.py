@@ -2,8 +2,8 @@
 Purpose: App settings, SMTP, dashboard, users list, setup progress endpoints.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-09-15
-Version: 1.11.0
+Modified: 2026-09-17
+Version: 1.12.0
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
 from app.api.guests import _guest_out
-from app.config import get_settings
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import Guest, ProxmoxHost, RestoreRun, User
@@ -48,6 +47,7 @@ from app.services.bootstrap import (
     get_heartbeat_settings,
     get_push_settings,
     get_smtp_settings,
+    public_app_url,
 )
 from app.services.email_templates import apply_default_templates
 from app.services.heartbeat import HeartbeatConfigError, send_heartbeat, validate_url
@@ -132,6 +132,14 @@ def update_settings(
         data["schedule_batch_size"] = max(1, min(500, int(data["schedule_batch_size"])))
     if "gap_alert_hours" in data and data["gap_alert_hours"] is not None:
         data["gap_alert_hours"] = max(1, min(168, int(data["gap_alert_hours"])))
+    if "public_base_url" in data and data["public_base_url"] is not None:
+        url = str(data["public_base_url"]).strip().rstrip("/")
+        if url and not url.startswith(("http://", "https://")):
+            raise HTTPException(
+                status_code=400,
+                detail="Public URL must start with http:// or https://",
+            )
+        data["public_base_url"] = url
     for key, value in data.items():
         setattr(settings, key, value)
     db.commit()
@@ -318,7 +326,7 @@ async def test_push(
             message="Push notifications are working. Restore test alerts will arrive here.",
             priority="default",
             tags=["bell"],
-            click_url=get_settings().app_base_url.rstrip("/"),
+            click_url=public_app_url(app_settings),
         )
     except Exception as exc:  # noqa: BLE001
         p = get_push_settings(db)

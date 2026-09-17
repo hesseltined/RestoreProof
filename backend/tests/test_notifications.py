@@ -2,8 +2,8 @@
 Purpose: Unit tests for nightly restore digests and schedule-gap alerts.
 Author: Doug Hesseltine
 Created: 2026-09-15
-Modified: 2026-09-15
-Version: 1.0.0
+Modified: 2026-09-17
+Version: 1.1.0
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from app.services.bootstrap import public_app_url
+from app.services.email_templates import build_digest_email
 from app.services.notifications import (
     evaluate_gap,
     schedule_digest_should_wait,
@@ -33,6 +35,7 @@ def _settings(**kw) -> SimpleNamespace:
         "notify_on_failure": True,
         "notify_to": "ops@example.com",
         "notify_cc": "",
+        "public_base_url": "",
         "email_success_subject": "ok {{guest_name}}",
         "email_success_body": "{{guest_name}}",
         "email_failure_subject": "bad {{guest_name}}",
@@ -118,8 +121,8 @@ def test_manual_run_mails_immediately() -> None:
         "app.services.restore.get_push_settings",
         return_value=SimpleNamespace(enabled=False, url=""),
     ), patch(
-        "app.services.restore.get_settings",
-        return_value=SimpleNamespace(app_base_url="https://rp.example"),
+        "app.services.restore.public_app_url",
+        return_value="https://rp.example",
     ), patch("app.services.restore.send_email", new_callable=AsyncMock) as send:
         asyncio.run(notify_run(db, run))
     send.assert_awaited_once()
@@ -135,8 +138,8 @@ def test_resend_force_bypasses_digest_hold() -> None:
         "app.services.restore.get_push_settings",
         return_value=SimpleNamespace(enabled=False, url=""),
     ), patch(
-        "app.services.restore.get_settings",
-        return_value=SimpleNamespace(app_base_url="https://rp.example"),
+        "app.services.restore.public_app_url",
+        return_value="https://rp.example",
     ), patch("app.services.restore.send_email", new_callable=AsyncMock) as send:
         asyncio.run(notify_run(db, run, force=True))
     send.assert_awaited_once()
@@ -171,7 +174,7 @@ def test_flush_when_held_runs_are_older_than_wait_window() -> None:
         assert schedule_digest_should_wait(db, now=NOW) is False
 
 
-def test_digest_sends_success_and_failure_separately() -> None:
+def test_digest_sends_one_email_with_pass_and_fail() -> None:
     ok = _run(id=1, status="success", source_name="jellyfin")
     bad = _run(id=2, status="failed", source_name="matomo", error_message="boom")
     db = _db_for_digest(pending=[ok, bad])
@@ -181,16 +184,58 @@ def test_digest_sends_success_and_failure_separately() -> None:
         "app.services.notifications.get_push_settings",
         return_value=SimpleNamespace(enabled=False, url=""),
     ), patch(
-        "app.services.notifications.get_settings",
-        return_value=SimpleNamespace(app_base_url="https://rp.example"),
+        "app.services.notifications.public_app_url",
+        return_value="https://rp.example",
     ), patch("app.services.notifications.send_email", new_callable=AsyncMock) as send:
         asyncio.run(send_schedule_digests(db))
-    assert send.await_count == 2
-    subjects = [c.kwargs["subject"] for c in send.await_args_list]
-    assert any("passed" in s for s in subjects)
-    assert any("failed" in s for s in subjects)
+    assert send.await_count == 1
+    subject = send.await_args.kwargs["subject"]
+    body = send.await_args.kwargs["body"]
+    assert "passed" in subject
+    assert "failed" in subject
+    assert "PASSED" in body
+    assert "FAILED" in body
+    assert "#16a34a" in body
+    assert "#dc2626" in body
+    assert "https://rp.example/runs/1" in body
+    assert "https://rp.example/runs/2" in body
+    assert "localhost" not in body
     assert ok.notified_at is not None
     assert bad.notified_at is not None
+
+
+def test_public_app_url_prefers_saved_setting() -> None:
+    row = SimpleNamespace(public_base_url=" https://restoreproof.technologist.services/ ")
+    with patch(
+        "app.services.bootstrap.get_settings",
+        return_value=SimpleNamespace(app_base_url="http://localhost:3080"),
+    ):
+        assert public_app_url(row) == "https://restoreproof.technologist.services"
+
+
+def test_public_app_url_falls_back_to_env() -> None:
+    row = SimpleNamespace(public_base_url="  ")
+    with patch(
+        "app.services.bootstrap.get_settings",
+        return_value=SimpleNamespace(app_base_url="https://rp.example"),
+    ):
+        assert public_app_url(row) == "https://rp.example"
+
+
+def test_digest_html_open_links_use_live_url() -> None:
+    ok = _run(id=331, status="success", source_name="immich")
+    bad = _run(id=332, status="failed", source_name="matomo", error_message="401")
+    subject, body = build_digest_email(
+        [ok, bad], "https://restoreproof.technologist.services"
+    )
+    assert "https://restoreproof.technologist.services/runs/331" in body
+    assert "https://restoreproof.technologist.services/runs/332" in body
+    assert "localhost" not in body
+    assert "PASSED" in body
+    assert "FAILED" in body
+    assert "1 passed" in body
+    assert "1 failed" in body
+    assert subject == "RestoreProof: 1 passed, 1 failed"
 
 
 def _gap_db(last) -> MagicMock:

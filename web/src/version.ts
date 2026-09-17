@@ -2,9 +2,9 @@
  * Purpose: Single app version string for UI footer / login (keep in sync with backend).
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-09-15
- * Version: 1.3.2
+ * Modified: 2026-09-17
+ * Version: 1.3.3
  */
 
 /** Bump when shipping UI or API images so Portainer deploys are identifiable. */
-export const APP_VERSION = "1.6.3";
+export const APP_VERSION = "1.6.4";

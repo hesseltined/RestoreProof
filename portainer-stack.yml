@@ -1,8 +1,8 @@
 # RestoreProof — Portainer-safe stack (keep this simple)
 # Author: Doug Hesseltine
 # Created: 2026-07-12
-# Modified: 2026-07-13
-# Version: 1.6.3
+# Modified: 2026-09-17
+# Version: 1.6.4
 #
 # In Portainer Environment variables, set EXACTLY these two names:
 #   SECRET_KEY
@@ -30,6 +30,7 @@ services:
       DATABASE_URL: postgresql+psycopg://restoreproof:${POSTGRES_PASSWORD}@db:5432/restoreproof
       SECRET_KEY: ${SECRET_KEY}
       DATA_DIR: /data
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3080}
     volumes:
       - rp_data:/data
       - rp_ssh:/root/.ssh
@@ -44,6 +45,7 @@ services:
       DATABASE_URL: postgresql+psycopg://restoreproof:${POSTGRES_PASSWORD}@db:5432/restoreproof
       SECRET_KEY: ${SECRET_KEY}
       DATA_DIR: /data
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3080}
     volumes:
       - rp_data:/data
       - rp_ssh:/root/.ssh

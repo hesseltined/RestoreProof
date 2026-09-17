@@ -2,8 +2,8 @@
 Purpose: Full restore → boot → evidence → cleanup cycle for one guest.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-09-15
-Version: 1.16.0
+Modified: 2026-09-17
+Version: 1.17.0
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from app.config import get_settings
 from app.models import Guest, ProxmoxHost, RestoreRun
 from app.security import decrypt_secret
 from app.services import locks
-from app.services.bootstrap import get_app_settings, get_push_settings
+from app.services.bootstrap import get_app_settings, get_push_settings, public_app_url
 from app.services.email_templates import build_notification_context, screenshot_attachment
 from app.services.mailer import parse_addr_list, send_email
 from app.services.notifications import schedule_digest_should_wait, send_schedule_digests
@@ -926,7 +926,7 @@ async def notify_run(db: Session, run: RestoreRun, *, force: bool = False) -> No
         await send_schedule_digests(db)
         return
     settings = get_app_settings(db)
-    app_url = get_settings().app_base_url.rstrip("/")
+    app_url = public_app_url(settings)
     ctx = build_notification_context(run, app_url)
     # Each channel decides independently, and neither can break the other.
     await _email_run(db, run, settings, ctx)

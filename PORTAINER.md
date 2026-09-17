@@ -1,8 +1,8 @@
 # Purpose: Deploy RestoreProof with Portainer using Docker Hub images
 # Author: Doug Hesseltine
 # Created: 2026-07-12
-# Modified: 2026-07-12
-# Version: 1.6.1
+# Modified: 2026-09-17
+# Version: 1.6.4
 
 # Deploy with Portainer
 
@@ -50,13 +50,17 @@ Login / footer show **UI v… · API v…**. If you see **API unreachable**, the
 
 The UI proxies `/api` on the same host, so NPM only needs to forward to port **3080**.
 
-### Optional: public URL for email links
+### Public URL for email links (required for production)
 
-Only if password-reset or notification emails need your public domain, add under **both** `api` and `worker` `environment:`:
+Set `APP_BASE_URL` on **both** `api` and `worker` (already in this stack file):
 
 ```yaml
 APP_BASE_URL: https://restoreproof.example.com
 ```
+
+In Portainer, add an environment variable named `APP_BASE_URL` with your live HTTPS URL (for this homelab: `https://restoreproof.technologist.services`). If you leave it unset, Open links in emails point at `http://localhost:3080`.
+
+You can also set **Public URL for email links** on Notifications after login. That value wins over the env var.
 
 ## After deploy
 

@@ -2,8 +2,8 @@
 Purpose: Nightly restore digests and schedule-gap alerts (missing drills).
 Author: Doug Hesseltine
 Created: 2026-09-15
-Modified: 2026-09-15
-Version: 1.0.0
+Modified: 2026-09-17
+Version: 1.1.0
 """
 
 from __future__ import annotations
@@ -14,9 +14,8 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
 from app.models import Guest, RestoreRun
-from app.services.bootstrap import get_app_settings, get_push_settings
+from app.services.bootstrap import get_app_settings, get_push_settings, public_app_url
 from app.services.email_templates import (
     build_digest_email,
     build_gap_alert_email,
@@ -105,20 +104,24 @@ async def _email_digest(
     db: Session,
     runs: list[RestoreRun],
     *,
-    failed: bool,
     app_url: str,
 ) -> None:
     settings = get_app_settings(db)
-    if not _wants(
-        "failed" if failed else "success",
-        on_success=settings.notify_on_success,
-        on_failure=settings.notify_on_failure,
-    ):
+    wanted = [
+        run
+        for run in runs
+        if _wants(
+            run.status,
+            on_success=settings.notify_on_success,
+            on_failure=settings.notify_on_failure,
+        )
+    ]
+    if not wanted:
         return
     to_addrs = parse_addr_list(settings.notify_to)
     if not to_addrs:
         return
-    subject, body = build_digest_email(runs, app_url, failed=failed)
+    subject, body = build_digest_email(wanted, app_url)
     await send_email(
         db,
         to_addrs=to_addrs,
@@ -149,24 +152,24 @@ async def _push_digest(
 
 
 async def send_schedule_digests(db: Session) -> int:
-    """Send one success digest and/or one failure digest, then mark those runs notified."""
+    """Send one nightly restore report (pass and fail together), then mark those runs notified."""
     pending = pending_schedule_runs(db)
     if not pending:
         return 0
-    app_url = get_settings().app_base_url.rstrip("/")
+    app_url = public_app_url(get_app_settings(db))
     successes = [r for r in pending if r.status == "success"]
     failures = [r for r in pending if r.status == "failed"]
     now = _now()
+    try:
+        await _email_digest(db, pending, app_url=app_url)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("restore digest email failed")
+        for run in pending:
+            _append_log(run, f"Restore digest email failed: {exc}")
+    else:
+        for run in pending:
+            _append_log(run, "Included in nightly restore digest")
     if successes:
-        try:
-            await _email_digest(db, successes, failed=False, app_url=app_url)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("success digest email failed")
-            for run in successes:
-                _append_log(run, f"Success digest email failed: {exc}")
-        else:
-            for run in successes:
-                _append_log(run, "Included in nightly success digest")
         try:
             await _push_digest(db, successes, failed=False, app_url=app_url)
         except Exception as exc:  # noqa: BLE001
@@ -174,15 +177,6 @@ async def send_schedule_digests(db: Session) -> int:
             for run in successes:
                 _append_log(run, f"Success digest push failed: {exc}")
     if failures:
-        try:
-            await _email_digest(db, failures, failed=True, app_url=app_url)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("failure digest email failed")
-            for run in failures:
-                _append_log(run, f"Failure digest email failed: {exc}")
-        else:
-            for run in failures:
-                _append_log(run, "Included in nightly failure digest")
         try:
             await _push_digest(db, failures, failed=True, app_url=app_url)
         except Exception as exc:  # noqa: BLE001
@@ -270,8 +264,8 @@ def evaluate_gap(db: Session, *, now: Optional[datetime] = None) -> Optional[dic
 
 
 async def _deliver_gap(db: Session, payload: dict) -> bool:
-    app_url = get_settings().app_base_url.rstrip("/")
     settings = get_app_settings(db)
+    app_url = public_app_url(settings)
     delivered = False
     to_addrs = parse_addr_list(settings.notify_to)
     if to_addrs:

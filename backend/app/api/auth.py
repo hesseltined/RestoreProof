@@ -2,7 +2,8 @@
 Purpose: Auth, setup, password reset, TOTP endpoints.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Version: 1.0.0
+Modified: 2026-09-17
+Version: 1.1.0
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ from app.security import (
     verify_password,
     verify_totp,
 )
-from app.services.bootstrap import ensure_defaults, get_app_settings
+from app.services.bootstrap import ensure_defaults, get_app_settings, public_app_url
 from app.services.mailer import send_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -118,7 +119,7 @@ async def password_reset_request(
         PasswordResetToken(user_id=user.id, token_hash=token_hash, expires_at=expires)
     )
     db.commit()
-    reset_url = f"{get_settings().app_base_url.rstrip('/')}/reset-password?token={raw}"
+    reset_url = f"{public_app_url(get_app_settings(db))}/reset-password?token={raw}"
     try:
         await send_email(
             db,

@@ -2,14 +2,15 @@
  * Purpose: App shell with collapsible sidebar nav on every page.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-22
- * Version: 1.3.1
+ * Modified: 2026-09-17
+ * Version: 1.4.0
  */
 
 import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "./auth";
 import { VersionFooter } from "./components/VersionFooter";
+import { UpdateBanner } from "./components/UpdateBanner";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: "◉" },
@@ -81,6 +82,7 @@ export function Layout() {
             session only.
           </div>
         )}
+        {!demo && <UpdateBanner />}
         <header className="topbar">
           <div className="row-actions">
             <button

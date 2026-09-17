@@ -2,8 +2,8 @@
 Purpose: Background worker — process queued restores, schedule rotation, retention.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-09-15
-Version: 1.8.0
+Modified: 2026-09-17
+Version: 1.9.0
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ from app.services.scheduler import (
     schedule_window_start,
 )
 from app.services.secrets_guard import validate_runtime_secrets
+from app.services.updates import maybe_refresh_update_cache
 
 logging.basicConfig(
     level=logging.INFO,
@@ -154,6 +155,7 @@ def main() -> None:
                         deleted = apply_retention(db)
                         if deleted:
                             logger.info("Retention deleted %s runs", deleted)
+                        maybe_refresh_update_cache(db)
                     swept = sweep_leftover_test_guests(db)
                     if swept:
                         logger.warning("Swept %s leftover test guest(s)", swept)

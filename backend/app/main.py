@@ -3,7 +3,7 @@ Purpose: RestoreProof FastAPI application entrypoint.
 Author: Doug Hesseltine
 Created: 2026-07-12
 Modified: 2026-09-17
-Version: 1.6.4
+Version: 1.6.5
 """
 
 from __future__ import annotations
@@ -13,13 +13,12 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, config_transfer, guests, hosts, runs, settings
+from app.api import auth, config_transfer, guests, hosts, runs, settings, updates
 from app.config import get_settings
 from app.database import Base, SessionLocal, engine, ensure_schema
 from app.services.bootstrap import ensure_defaults
 from app.services.secrets_guard import validate_runtime_secrets
-
-APP_VERSION = "1.6.4"
+from app.version import APP_VERSION
 
 app = FastAPI(title="RestoreProof", version=APP_VERSION)
 
@@ -40,6 +39,7 @@ app.include_router(config_transfer.router, prefix="/api")
 app.include_router(hosts.router, prefix="/api")
 app.include_router(guests.router, prefix="/api")
 app.include_router(runs.router, prefix="/api")
+app.include_router(updates.router, prefix="/api")
 
 
 @app.on_event("startup")

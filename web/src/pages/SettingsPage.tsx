@@ -1,14 +1,15 @@
 /**
- * Purpose: App settings — boot wait, retention, branding, config export/import, setup wizard.
+ * Purpose: App settings — boot wait, retention, branding, updates, config export/import.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-30
- * Version: 1.4.0
+ * Modified: 2026-09-17
+ * Version: 1.5.0
  */
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { api, downloadConfigExport, uploadConfigImport } from "../api";
 import { SetupWizardPanel } from "../components/SetupWizardPanel";
+import { fetchUpdates, type UpdateStatus } from "../components/UpdateBanner";
 
 type Settings = {
   branding_title: string;
@@ -52,12 +53,19 @@ export function SettingsPage() {
   const [purgeBefore, setPurgeBefore] = useState(defaultPurgeDate);
   const [purgeBusy, setPurgeBusy] = useState(false);
   const [staleBusy, setStaleBusy] = useState(false);
+  const [update, setUpdate] = useState<UpdateStatus | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     api<Settings>("/settings")
       .then(setForm)
       .catch((e) => setError(e.message));
+    fetchUpdates()
+      .then(setUpdate)
+      .catch(() => {
+        /* keep the page usable if GitHub/Hub is unreachable */
+      });
   }, []);
 
   async function onSave(e: FormEvent) {
@@ -190,16 +198,97 @@ export function SettingsPage() {
     }
   }
 
+  async function onCheckUpdates() {
+    setUpdateBusy(true);
+    setError("");
+    try {
+      const next = await api<UpdateStatus>("/updates/check", { method: "POST" });
+      setUpdate(next);
+      if (next.error) setError(next.error);
+      else if (next.update_available) {
+        setMsg(`RestoreProof ${next.latest_version} is out. You are on ${next.current_version}.`);
+      } else {
+        setMsg(`You are on ${next.current_version}. No newer release found.`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Update check failed");
+    } finally {
+      setUpdateBusy(false);
+    }
+  }
+
+  async function onToggleUpdateCheck(enabled: boolean) {
+    try {
+      const next = await api<UpdateStatus>("/updates/preference", {
+        method: "PUT",
+        body: JSON.stringify({ enabled }),
+      });
+      setUpdate(next);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save update preference");
+    }
+  }
+
   if (!form) return <p className="help">Loading…</p>;
 
   return (
     <div>
       <h1 className="page-title">Settings</h1>
-      <p className="page-sub">Boot wait, evidence retention, branding, and migration.</p>
+      <p className="page-sub">Boot wait, evidence retention, branding, updates, and migration.</p>
       {msg && <p className="success">{msg}</p>}
       {error && <p className="error">{error}</p>}
 
       <SetupWizardPanel alwaysShowShell />
+
+      <section className="card">
+        <h2 className="section-title">App updates</h2>
+        <p className="help" style={{ marginTop: 0 }}>
+          RestoreProof checks GitHub and Docker Hub about every six hours. A banner appears when
+          a newer version is published.
+        </p>
+        {update && (
+          <p>
+            This install: <strong>v{update.current_version}</strong>
+            {update.latest_version ? (
+              <>
+                {" "}
+                · newest found: <strong>v{update.latest_version}</strong>
+              </>
+            ) : (
+              " · no newer tag found yet"
+            )}
+            {update.last_checked_at
+              ? ` · last check ${new Date(update.last_checked_at).toLocaleString()}`
+              : ""}
+          </p>
+        )}
+        {update?.update_available && (
+          <>
+            <p className="success">
+              {update.latest_version} is out. Portainer: Pull and redeploy. Compose:
+            </p>
+            <pre className="update-banner-code">{update.upgrade.compose}</pre>
+          </>
+        )}
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={update?.check_enabled !== false}
+            onChange={(e) => onToggleUpdateCheck(e.target.checked)}
+          />
+          Show a banner when a newer version is published
+        </label>
+        <div className="row-actions" style={{ marginTop: "0.75rem" }}>
+          <button className="btn" type="button" disabled={updateBusy} onClick={onCheckUpdates}>
+            {updateBusy ? "Checking…" : "Check now"}
+          </button>
+          {update?.release_url && (
+            <a className="btn secondary" href={update.release_url} target="_blank" rel="noreferrer">
+              Release notes
+            </a>
+          )}
+        </div>
+      </section>
 
       <section className="card config-transfer-card">
         <h2 className="section-title">Export / Import configuration</h2>

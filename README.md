@@ -75,6 +75,7 @@ Open **http://localhost:3080** — create the first admin, then add a host and r
 - Local admins, password reset, TOTP 2FA
 - Light/dark UI, collapsible sidebar
 - Version string on login and page footers
+- Banner when GitHub or Docker Hub has a newer RestoreProof, with upgrade steps
 
 ## GitHub + Docker Hub
 

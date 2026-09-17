@@ -4,8 +4,8 @@ RestoreProof application settings.
 Purpose: Load environment configuration for API and worker.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-12
-Version: 1.1.0
+Modified: 2026-09-17
+Version: 1.2.0
 """
 
 from functools import lru_cache
@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     default_boot_wait_seconds: int = 60
     access_token_expire_minutes: int = 60 * 12
     reset_token_expire_minutes: int = 60
+    github_repo: str = "hesseltined/RestoreProof"
+    dockerhub_image: str = "yesitsmedoug/restoreproof-api"
 
     @property
     def cors_origin_list(self) -> list[str]:

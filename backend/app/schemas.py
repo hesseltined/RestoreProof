@@ -3,7 +3,7 @@ Purpose: Pydantic request/response schemas.
 Author: Doug Hesseltine
 Created: 2026-07-12
 Modified: 2026-09-17
-Version: 1.13.0
+Version: 1.14.0
 """
 
 from __future__ import annotations
@@ -76,6 +76,7 @@ class AppSettingsOut(BaseModel):
     notify_to: str
     notify_cc: str
     public_base_url: str = ""
+    update_check_enabled: bool = True
     gap_alert_enabled: bool = True
     gap_alert_hours: int = 26
     gap_alert_last_sent_at: Optional[datetime] = None
@@ -102,6 +103,7 @@ class AppSettingsUpdate(BaseModel):
     notify_to: Optional[str] = None
     notify_cc: Optional[str] = None
     public_base_url: Optional[str] = None
+    update_check_enabled: Optional[bool] = None
     gap_alert_enabled: Optional[bool] = None
     gap_alert_hours: Optional[int] = Field(default=None, ge=1, le=168)
     email_success_subject: Optional[str] = None

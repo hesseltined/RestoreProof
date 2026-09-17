@@ -220,6 +220,48 @@ textarea {
   line-height: 1.4;
 }
 
+.update-banner {
+  padding: 0.75rem 1.5rem 0.85rem;
+  background: color-mix(in srgb, var(--ok) 16%, var(--surface));
+  border-bottom: 1px solid color-mix(in srgb, var(--ok) 35%, var(--border));
+  color: var(--text);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.update-banner-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem 1rem;
+}
+
+.update-banner-text {
+  margin: 0;
+}
+
+.update-banner-steps {
+  margin-top: 0.75rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid color-mix(in srgb, var(--ok) 25%, var(--border));
+}
+
+.update-banner-steps p {
+  margin: 0 0 0.5rem;
+}
+
+.update-banner-code {
+  margin: 0 0 0.65rem;
+  padding: 0.7rem 0.85rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  white-space: pre-wrap;
+}
+
 .content {
   padding: 1.5rem;
   max-width: 1200px;

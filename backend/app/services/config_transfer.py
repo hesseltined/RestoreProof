@@ -43,6 +43,7 @@ APP_SETTINGS_FIELDS = (
     "notify_to",
     "notify_cc",
     "public_base_url",
+    "update_check_enabled",
     "gap_alert_enabled",
     "gap_alert_hours",
     "email_success_subject",

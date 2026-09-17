@@ -3,7 +3,7 @@ Purpose: SQLAlchemy ORM models for RestoreProof.
 Author: Doug Hesseltine
 Created: 2026-07-12
 Modified: 2026-09-17
-Version: 1.10.0
+Version: 1.11.0
 """
 
 from __future__ import annotations
@@ -76,6 +76,15 @@ class AppSettings(Base):
     notify_cc: Mapped[str] = mapped_column(Text, default="")
     # Public origin for email/push links. Empty = APP_BASE_URL env (localhost default).
     public_base_url: Mapped[str] = mapped_column(String(512), default="")
+    update_check_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    update_dismissed_version: Mapped[str] = mapped_column(String(64), default="")
+    update_last_checked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    update_latest_version: Mapped[str] = mapped_column(String(64), default="")
+    update_latest_url: Mapped[str] = mapped_column(String(512), default="")
+    update_latest_notes: Mapped[str] = mapped_column(Text, default="")
+    update_latest_source: Mapped[str] = mapped_column(String(32), default="")
     # Email/push when the schedule is on but no restore finishes for N hours.
     gap_alert_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     gap_alert_hours: Mapped[int] = mapped_column(Integer, default=26)

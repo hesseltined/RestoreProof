@@ -3,8 +3,8 @@
  * Author: Doug Hesseltine
  * Created: 2026-07-12
  * Modified: 2026-09-17
- * Version: 1.3.3
+ * Version: 1.3.4
  */
 
 /** Bump when shipping UI or API images so Portainer deploys are identifiable. */
-export const APP_VERSION = "1.6.4";
+export const APP_VERSION = "1.6.5";

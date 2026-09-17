@@ -2,7 +2,7 @@
 # Author: Doug Hesseltine
 # Created: 2026-07-12
 # Modified: 2026-09-17
-# Version: 1.6.4
+# Version: 1.6.5
 
 # Deploy with Portainer
 
@@ -81,6 +81,8 @@ Settings → **Export / Import configuration** moves hosts, SMTP, schedules, and
 | Keep `API_SECRET_KEY` and `WORKER_SECRET_KEY` identical | Worker and API must encrypt/decrypt the same way |
 
 ## Upgrading
+
+The UI shows a banner when GitHub or Docker Hub has a newer RestoreProof than this install. Settings → **App updates** → **Check now**, then **Pull and redeploy**.
 
 Edit stack → **Pull and redeploy** (`latest` tag).
 

@@ -170,4 +170,6 @@ docker compose -f portainer-stack.yml --env-file .env up -d
 docker compose up -d --build
 ```
 
+The UI shows a banner when GitHub or Docker Hub has a newer version (Settings → App updates).
+
 Volumes `rp_pgdata` and `rp_data` preserve database and evidence.

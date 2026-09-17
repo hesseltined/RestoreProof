@@ -3,7 +3,7 @@ Purpose: SQLAlchemy engine and session helpers.
 Author: Doug Hesseltine
 Created: 2026-07-12
 Modified: 2026-09-17
-Version: 1.9.0
+Version: 1.10.0
 """
 
 from collections.abc import Generator
@@ -63,6 +63,13 @@ def ensure_schema() -> None:
         "ALTER TABLE restore_runs ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ",
         "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS notified_at_backfilled BOOLEAN DEFAULT FALSE",
         "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS public_base_url VARCHAR(512) DEFAULT ''",
+        "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS update_check_enabled BOOLEAN DEFAULT TRUE",
+        "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS update_dismissed_version VARCHAR(64) DEFAULT ''",
+        "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS update_last_checked_at TIMESTAMPTZ",
+        "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS update_latest_version VARCHAR(64) DEFAULT ''",
+        "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS update_latest_url VARCHAR(512) DEFAULT ''",
+        "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS update_latest_notes TEXT DEFAULT ''",
+        "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS update_latest_source VARCHAR(32) DEFAULT ''",
         # One-shot: mark pre-digest runs as already mailed so the first worker
         # loop after upgrade does not dump history into a single digest.
         """

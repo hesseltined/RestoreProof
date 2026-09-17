@@ -2,8 +2,8 @@
  * Purpose: Client-side mock API for RestoreProof /demo (no backend, no login).
  * Author: Doug Hesseltine
  * Created: 2026-07-13
- * Modified: 2026-07-31
- * Version: 2.5.0
+ * Modified: 2026-09-17
+ * Version: 2.6.0
  */
 
 import { APP_VERSION } from "../version";
@@ -189,6 +189,32 @@ export async function demoApiFetch(path: string, options: RequestInit = {}): Pro
   // Health
   if (method === "GET" && (clean === "/health" || clean === "/api/health")) {
     return json({ status: "ok", version: `${APP_VERSION}-demo` });
+  }
+
+  if (
+    (method === "GET" && clean === "/updates") ||
+    (method === "POST" && clean === "/updates/check") ||
+    (method === "POST" && clean === "/updates/dismiss") ||
+    (method === "PUT" && clean === "/updates/preference")
+  ) {
+    return json({
+      current_version: APP_VERSION,
+      latest_version: APP_VERSION,
+      update_available: false,
+      dismissed: false,
+      release_url: "https://github.com/hesseltined/RestoreProof/releases",
+      notes: "",
+      source: "github",
+      last_checked_at: new Date().toISOString(),
+      check_enabled: true,
+      upgrade: {
+        portainer: "Open Portainer → Stacks → restoreproof → Pull and redeploy.",
+        compose:
+          "docker compose -f portainer-stack.yml pull\ndocker compose -f portainer-stack.yml up -d",
+        git: "git pull && docker compose up -d --build",
+      },
+      error: null,
+    });
   }
 
   // Auth

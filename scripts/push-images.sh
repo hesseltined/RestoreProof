@@ -3,7 +3,7 @@
 # Author: Doug Hesseltine
 # Created: 2026-07-12
 # Modified: 2026-09-17
-# Version: 1.6.4
+# Version: 1.6.5
 #
 # Builds linux/amd64 (Portainer / Proxmox Docker hosts) and pushes.
 # Does NOT run docker compose up / restart local containers.
@@ -13,7 +13,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="${VERSION:-1.6.4}"
+VERSION="${VERSION:-1.6.5}"
 PLATFORM="${PLATFORM:-linux/amd64}"
 REGISTRY_USER="${DOCKERHUB_USER:-yesitsmedoug}"
 IMAGE_API="${REGISTRY_USER}/restoreproof-api"
@@ -45,3 +45,5 @@ echo "Done."
 echo "  ${IMAGE_API}:${VERSION} / latest  (${PLATFORM})"
 echo "  ${IMAGE_WEB}:${VERSION} / latest  (${PLATFORM})"
 echo "Portainer stack: portainer-stack.yml  (see PORTAINER.md)"
+echo "GitHub tag so in-app update checks see this version:"
+echo "  git tag v${VERSION} && git push origin v${VERSION}"

@@ -2,8 +2,8 @@
 Purpose: SQLAlchemy ORM models for RestoreProof.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-09-17
-Version: 1.11.0
+Modified: 2026-09-27
+Version: 1.12.0
 """
 
 from __future__ import annotations
@@ -179,6 +179,9 @@ class ProxmoxHost(Base):
     verify_ssl: Mapped[bool] = mapped_column(Boolean, default=False)
     ssh_host: Mapped[str] = mapped_column(String(255), default="")
     ssh_port: Mapped[int] = mapped_column(Integer, default=22)
+    # Set on sync from /cluster/status so a second connection to the same cluster
+    # is not imported as a second copy of every guest.
+    cluster_fingerprint: Mapped[str] = mapped_column(String(1024), default="")
     ssh_user: Mapped[str] = mapped_column(String(64), default="root")
     ssh_private_key_path: Mapped[str] = mapped_column(String(512), default="")
     preferred_restore_storage: Mapped[str] = mapped_column(String(120), default="")

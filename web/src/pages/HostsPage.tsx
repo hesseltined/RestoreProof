@@ -2,8 +2,8 @@
  * Purpose: Proxmox host connections, API/SSH tests, sync, latest restore evidence.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-12
- * Version: 1.5.0
+ * Modified: 2026-09-27
+ * Version: 1.6.0
  */
 
 import { FormEvent, useEffect, useState } from "react";
@@ -264,7 +264,7 @@ export function HostsPage() {
     <div>
       <h1 className="page-title">Hosts</h1>
       <p className="page-sub">
-        Connect Proxmox API endpoints (standalone or cluster). SSH is used for VM console screenshots.
+        Connect one Proxmox API per cluster. SSH is used for console screenshots and is routed to the node that owns the guest.
       </p>
       {error && <p className="error">{error}</p>}
       {info && <p className="success">{info}</p>}
@@ -330,6 +330,7 @@ export function HostsPage() {
             <label>SSH host</label>
             <input
               value={form.ssh_host}
+              placeholder="One node IP — commands hop to the guest's node"
               onChange={(e) => setForm({ ...form, ssh_host: e.target.value })}
             />
           </div>

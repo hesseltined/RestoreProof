@@ -2,8 +2,8 @@
 Purpose: Proxmox VE REST API client (token auth).
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-09-11
-Version: 1.8.0
+Modified: 2026-09-27
+Version: 1.9.0
 """
 
 from __future__ import annotations
@@ -471,11 +471,47 @@ class ProxmoxClient:
             return data
         return []
 
+    def cluster_status(self) -> list[dict]:
+        """Cluster name plus each node's corosync address (GET /cluster/status)."""
+        data = self.request("GET", "/cluster/status") or []
+        if isinstance(data, list):
+            return data
+        return []
+
     def cluster_resources(self, resource_type: Optional[str] = None) -> list[dict]:
         params = {}
         if resource_type:
             params["type"] = resource_type
         return self.request("GET", "/cluster/resources", params=params) or []
+
+
+def cluster_fingerprint(status_rows: list[dict] | None) -> str:
+    """
+    Stable id for one Proxmox cluster from GET /cluster/status.
+
+    Two API endpoints that see the same nodes (any member can serve the cluster
+    API) produce the same string. Empty when the payload has no node rows.
+    """
+    if not status_rows:
+        return ""
+    cluster_name = ""
+    members: list[str] = []
+    for row in status_rows:
+        kind = str(row.get("type") or "")
+        if kind == "cluster":
+            cluster_name = str(row.get("name") or "").strip()
+            continue
+        if kind != "node":
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        ip = str(row.get("ip") or "").strip()
+        members.append(f"{name}@{ip}" if ip else name)
+    if not members:
+        return ""
+    members.sort()
+    return f"{cluster_name}|{','.join(members)}"
 
 
 def guest_is_protected(cfg: dict) -> bool:

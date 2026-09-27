@@ -2,8 +2,8 @@
 Purpose: SQLAlchemy engine and session helpers.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-09-17
-Version: 1.10.0
+Modified: 2026-09-27
+Version: 1.11.0
 """
 
 from collections.abc import Generator
@@ -34,6 +34,7 @@ def ensure_schema() -> None:
     """Add columns introduced after initial create_all (Postgres IF NOT EXISTS)."""
     statements = [
         "ALTER TABLE proxmox_hosts ADD COLUMN IF NOT EXISTS api_ok_at TIMESTAMPTZ",
+        "ALTER TABLE proxmox_hosts ADD COLUMN IF NOT EXISTS cluster_fingerprint VARCHAR(1024) DEFAULT ''",
         "ALTER TABLE proxmox_hosts ADD COLUMN IF NOT EXISTS ssh_ok_at TIMESTAMPTZ",
         "ALTER TABLE smtp_settings ADD COLUMN IF NOT EXISTS smtp_ok_at TIMESTAMPTZ",
         "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS schedule_batch_size INTEGER DEFAULT 1",

@@ -2,8 +2,8 @@
 Purpose: SSH helpers for QMP screendump, qmrestore/pct restore fallback, and key generation.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-09-11
-Version: 1.5.0
+Modified: 2026-09-27
+Version: 1.6.0
 """
 
 from __future__ import annotations
@@ -21,6 +21,49 @@ from PIL import Image
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+# Cluster nodes already trust root SSH. BatchMode keeps a missing key from hanging the drill.
+_NODE_SSH_PREFIX = (
+    "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20"
+)
+
+_SSH_TRANSPORT_MARKERS = (
+    "permission denied",
+    "host key verification failed",
+    "could not resolve hostname",
+    "name or service not known",
+    "connection refused",
+    "connection timed out",
+    "timed out",
+    "no route to host",
+    "connection reset",
+)
+
+
+def nodes_match(local_node: str, target_node: str) -> bool:
+    """True when the SSH landing host is already the node that owns the guest."""
+    target = (target_node or "").strip().lower()
+    if not target:
+        return True
+    local = (local_node or "").strip().lower()
+    if not local:
+        return False
+    return local.split(".")[0] == target.split(".")[0]
+
+
+def command_on_proxmox_node(local_node: str, target_node: str, command: str) -> str:
+    """
+    Run ``command`` on ``target_node``.
+
+    Proxmox ``qm`` / ``pct`` / QEMU monitor only see guests on the node that holds
+    their config. The landing SSH host may be a different cluster member, so hop
+    with the cluster's own root SSH instead of opening a second RestoreProof host.
+    """
+    target = (target_node or "").strip()
+    if not target or nodes_match(local_node, target):
+        return command
+    remote = shlex.quote(f"root@{target}")
+    return f"{_NODE_SSH_PREFIX} {remote} {shlex.quote(command)}"
 
 
 def convert_screendump_to_png(src_path: str | Path, dest_path: str | Path) -> Path:
@@ -94,6 +137,14 @@ class SSHSession:
         self.username = username
         self.private_key_path = private_key_path
         self.client: paramiko.SSHClient | None = None
+        # Proxmox node that owns the guest. Empty means run on the landing host.
+        self._target_node = ""
+        self._local_node: str | None = None
+        self._announced_node = ""
+
+    def bind_node(self, node: str | None) -> None:
+        """Send later qm/pct/screendump commands to this cluster node."""
+        self._target_node = (node or "").strip()
 
     def __enter__(self) -> "SSHSession":
         client = paramiko.SSHClient()
@@ -115,13 +166,66 @@ class SSHSession:
         if self.client:
             self.client.close()
 
-    def run(self, command: str, timeout: int = 120) -> tuple[int, str, str]:
+    def _exec(self, command: str, timeout: int = 120) -> tuple[int, str, str]:
         assert self.client is not None
         _stdin, stdout, stderr = self.client.exec_command(command, timeout=timeout)
         exit_code = stdout.channel.recv_exit_status()
         out = stdout.read().decode("utf-8", errors="replace")
         err = stderr.read().decode("utf-8", errors="replace")
         return exit_code, out, err
+
+    def _exec_bytes(self, command: str, timeout: int = 120) -> tuple[int, bytes, bytes]:
+        """Read stdout before the exit status so a multi-megabyte screendump cannot stall."""
+        assert self.client is not None
+        _stdin, stdout, stderr = self.client.exec_command(command, timeout=timeout)
+        out = stdout.read()
+        err = stderr.read()
+        exit_code = stdout.channel.recv_exit_status()
+        return exit_code, out, err
+
+    def _local_node_name(self) -> str:
+        if self._local_node is not None:
+            return self._local_node
+        code, out, _err = self._exec("hostname -s", timeout=15)
+        name = ""
+        if code == 0 and out.strip():
+            name = out.strip().splitlines()[0].strip()
+        self._local_node = name
+        return name
+
+    def _note_remote_node(self, target: str) -> None:
+        if self._announced_node == target:
+            return
+        logger.info(
+            "SSH landing host %s; guest commands run on cluster node %s",
+            self.host,
+            target,
+        )
+        self._announced_node = target
+
+    def _hop_failure_hint(self, target: str, out: str, err: str, code: int) -> str:
+        if code == 0:
+            return err
+        blob = f"{out}\n{err}".lower()
+        if not any(marker in blob for marker in _SSH_TRANSPORT_MARKERS):
+            return err
+        return (
+            f"{err}\n"
+            f"Could not SSH from {self.host} to cluster node {target}. "
+            "Proxmox cluster nodes accept root SSH from each other. "
+            f"Install the RestoreProof key only on {self.username}@{self.host}."
+        )
+
+    def run(self, command: str, timeout: int = 120) -> tuple[int, str, str]:
+        target = self._target_node
+        if target:
+            local_node = self._local_node_name()
+            if not nodes_match(local_node, target):
+                self._note_remote_node(target)
+                command = command_on_proxmox_node(local_node, target, command)
+                code, out, err = self._exec(command, timeout=timeout)
+                return code, out, self._hop_failure_hint(target, out, err, code)
+        return self._exec(command, timeout=timeout)
 
     def screendump_vm(self, vmid: int, remote_path: str) -> None:
         """
@@ -299,10 +403,27 @@ class SSHSession:
         return "deleted"
 
     def fetch_file(self, remote_path: str, local_path: str) -> None:
+        """Copy a file from the node that owns the guest back to this app."""
         assert self.client is not None
-        sftp = self.client.open_sftp()
-        try:
-            sftp.get(remote_path, local_path)
-        finally:
-            sftp.close()
-        self.run(f"rm -f '{remote_path}'")
+        target = self._target_node
+        local_node = self._local_node_name() if target else ""
+        quoted = shlex.quote(remote_path)
+        if not target or nodes_match(local_node, target):
+            sftp = self.client.open_sftp()
+            try:
+                sftp.get(remote_path, local_path)
+            finally:
+                sftp.close()
+            self._exec(f"rm -f {quoted}")
+            return
+        self._note_remote_node(target)
+        cmd = command_on_proxmox_node(local_node, target, f"cat {quoted}")
+        code, data, err = self._exec_bytes(cmd, timeout=60)
+        if code != 0 or not data:
+            message = err.decode("utf-8", errors="replace").strip()
+            hint = self._hop_failure_hint(target, "", message, code)
+            raise RuntimeError(
+                f"Could not read screendump on node {target}: {hint.strip() or f'exit {code}'}"
+            )
+        Path(local_path).write_bytes(data)
+        self._exec(command_on_proxmox_node(local_node, target, f"rm -f {quoted}"))

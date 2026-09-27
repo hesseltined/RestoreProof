@@ -2,8 +2,8 @@
 Purpose: Full restore → boot → evidence → cleanup cycle for one guest.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-09-17
-Version: 1.17.0
+Modified: 2026-09-27
+Version: 1.18.0
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ from app.services.pusher import build_run_push, send_push
 from app.services.proxmox import (
     ProxmoxAPIError,
     ProxmoxClient,
+    cluster_fingerprint,
     is_hostdev_privilege_error,
     is_lxc_mount_privilege_error,
     is_successful_task_exit,
@@ -322,6 +323,8 @@ def cleanup_test_guest(
 ) -> str:
     """Stop and destroy a leftover test qemu/lxc guest. Returns a short status message."""
     guest_type = _normalize_guest_type(guest_type)
+    if ssh is not None:
+        ssh.bind_node(node)
     last_err: Optional[Exception] = None
     for attempt in range(1, 4):
         try:
@@ -581,9 +584,102 @@ def _skip_queued_runs_for_guest(db: Session, guest: Guest, reason: str) -> int:
     return len(pending)
 
 
+def duplicate_cluster_owner(
+    host_id: int,
+    host_enabled: bool,
+    peers: list[tuple[int, bool]],
+) -> int | None:
+    """
+    Host id that already owns this cluster's inventory, or None if ``host_id`` should.
+
+    ``peers`` is ``(id, enabled)`` for other connections with the same fingerprint.
+    The lowest enabled id wins. A disabled extra host is not an owner.
+    """
+    enabled_ids = [peer_id for peer_id, enabled in peers if enabled]
+    if host_enabled:
+        enabled_ids.append(host_id)
+    if not enabled_ids:
+        return None
+    owner = min(enabled_ids)
+    if owner == host_id:
+        return None
+    return owner
+
+
+def _purge_host_inventory(db: Session, host: ProxmoxHost) -> int:
+    """Drop guests imported through a duplicate cluster connection."""
+    guests = db.query(Guest).filter(Guest.host_id == host.id).all()
+    for guest in guests:
+        _skip_queued_runs_for_guest(
+            db,
+            guest,
+            f"VMID {guest.vmid} ({guest.name}) removed because host {host.name} "
+            "duplicates a cluster that is already connected",
+        )
+        db.delete(guest)
+    if guests:
+        logger.info(
+            "Removed %s duplicate guest(s) from host %s",
+            len(guests),
+            host.name,
+        )
+    return len(guests)
+
+
+def _refuse_duplicate_cluster(db: Session, host: ProxmoxHost, client: ProxmoxClient) -> None:
+    """
+    Keep a single guest inventory per Proxmox cluster.
+
+    Every node serves the same /cluster/resources list. A second Host pointed at
+    another node copies every VM and the backup-job rows stop matching.
+    """
+    try:
+        status = client.cluster_status()
+    except ProxmoxAPIError as exc:
+        logger.warning("Could not read cluster status for host %s: %s", host.name, exc)
+        return
+    fingerprint = cluster_fingerprint(status)
+    if not fingerprint:
+        return
+    peers = (
+        db.query(ProxmoxHost)
+        .filter(ProxmoxHost.cluster_fingerprint == fingerprint)
+        .filter(ProxmoxHost.id != host.id)
+        .all()
+    )
+    owner_id = duplicate_cluster_owner(
+        host.id,
+        bool(host.enabled),
+        [(peer.id, bool(peer.enabled)) for peer in peers],
+    )
+    host.cluster_fingerprint = fingerprint
+    if owner_id is None:
+        for peer in peers:
+            removed = _purge_host_inventory(db, peer)
+            peer.last_error = (
+                f"Same Proxmox cluster as host \"{host.name}\". "
+                f"Removed {removed} duplicate guest(s). Delete this extra host. "
+                "One API connection covers every node; SSH is routed to the node "
+                "that owns each guest."
+            )
+        return
+    owner = next((peer for peer in peers if peer.id == owner_id), None)
+    owner_name = owner.name if owner else str(owner_id)
+    _purge_host_inventory(db, host)
+    message = (
+        f"This connection sees the same Proxmox cluster as host \"{owner_name}\". "
+        "RestoreProof keeps one inventory per cluster, so guests on this host were removed. "
+        "Delete this extra host. SSH commands run on the node that owns each guest."
+    )
+    host.last_error = message
+    db.commit()
+    raise RuntimeError(message)
+
+
 def sync_host_guests(db: Session, host: ProxmoxHost) -> int:
     client = _client_for_host(host)
     client.version()
+    _refuse_duplicate_cluster(db, host, client)
     resources = client.cluster_resources(resource_type="vm")
     try:
         backup_jobs = client.list_backup_jobs()
@@ -1040,6 +1136,12 @@ def execute_restore_run(db: Session, run_id: int) -> None:
         db.commit()
 
         ssh_ready = bool(host.ssh_host and host.ssh_private_key_path)
+        if ssh_ready:
+            _log(
+                run,
+                f"SSH enters at {host.ssh_user}@{host.ssh_host}; "
+                f"qm/pct and screenshots run on node {node}",
+            )
         source_hostdevs: list[str] = []
         source_bind_mounts: list[str] = []
         source_cfg: dict = {}
@@ -1086,9 +1188,11 @@ def execute_restore_run(db: Session, run_id: int) -> None:
                     "or CT bind/device mounts (API tokens cannot apply those). "
                     "Configure SSH on the host."
                 )
-            return SSHSession(
+            session = SSHSession(
                 host.ssh_host, host.ssh_port, host.ssh_user, host.ssh_private_key_path
             )
+            session.bind_node(node)
+            return session
 
         def _cleanup_partial() -> None:
             try:
@@ -1587,9 +1691,15 @@ def execute_restore_run(db: Session, run_id: int) -> None:
             remote = f"/tmp/restoreproof-{test_vmid}.ppm"
             local_raw = evidence_dir / f"run_{run.id}.ppm"
             local = evidence_dir / f"run_{run.id}.png"
+            _log(
+                run,
+                f"Screenshot: SSH {host.ssh_user}@{host.ssh_host}, "
+                f"QEMU monitor on node {node}",
+            )
             with SSHSession(
                 host.ssh_host, host.ssh_port, host.ssh_user, host.ssh_private_key_path
             ) as ssh:
+                ssh.bind_node(node)
                 ssh.screendump_vm(test_vmid, remote)
                 ssh.fetch_file(remote, str(local_raw))
             convert_screendump_to_png(local_raw, local)

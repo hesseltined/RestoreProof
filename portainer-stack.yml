@@ -1,8 +1,8 @@
 # RestoreProof — Portainer-safe stack (keep this simple)
 # Author: Doug Hesseltine
 # Created: 2026-07-12
-# Modified: 2026-09-17
-# Version: 1.6.5
+# Modified: 2026-09-27
+# Version: 1.6.6
 #
 # In Portainer Environment variables, set EXACTLY these two names:
 #   SECRET_KEY

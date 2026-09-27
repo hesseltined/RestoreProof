@@ -2,8 +2,8 @@
 Purpose: Proxmox host connection management + SSH key exchange helpers.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-12
-Version: 1.3.1
+Modified: 2026-09-27
+Version: 1.4.0
 """
 
 from __future__ import annotations
@@ -264,8 +264,10 @@ def get_ssh_public_key(
         "instructions": (
             "Run the install command from your admin machine (Mac/PC) to append this public key "
             f"to authorized_keys on {host.ssh_user}@{host.ssh_host or '<ssh_host>'}. "
-            "Then click Test SSH. RestoreProof uses the key only for QEMU console screendumps "
-            "and related qm/pct helpers."
+            "One node is enough for a cluster. RestoreProof SSHes in there, then uses the "
+            "cluster's own root SSH to run screendump and qm/pct on the node that owns the guest. "
+            "Add the cluster once — a second host pointed at the same API copies the inventory "
+            "and backup mappings break."
         ),
     }
 

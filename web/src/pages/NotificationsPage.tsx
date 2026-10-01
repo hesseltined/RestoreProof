@@ -2,8 +2,8 @@
  * Purpose: SMTP presets, push (ntfy) delivery, and notification templates.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-09-17
- * Version: 1.10.0
+ * Modified: 2026-10-01
+ * Version: 1.11.0
  */
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
@@ -43,6 +43,8 @@ type AppSettings = {
   gap_alert_enabled: boolean;
   gap_alert_hours: number;
   gap_alert_last_sent_at?: string | null;
+  unbacked_nudge_enabled?: boolean;
+  unbacked_nudge_last_sent_at?: string | null;
   email_success_subject: string;
   email_failure_subject: string;
   email_success_body: string;
@@ -678,6 +680,33 @@ export function NotificationsPage() {
         <div className="row-actions">
           <button className="btn" type="submit">
             Save gap alert
+          </button>
+        </div>
+      </form>
+
+      <form className="card" onSubmit={saveNotify}>
+        <h3 style={{ marginTop: 0 }}>New guests without a backup job</h3>
+        <p className="help" style={{ marginTop: 0 }}>
+          Once a day, after inventory sync, RestoreProof emails the guests first seen that day
+          that have no Proxmox backup job. Each guest is listed once. Guests already in the
+          inventory stay off this email.
+        </p>
+        <label>
+          <input
+            type="checkbox"
+            checked={settings.unbacked_nudge_enabled !== false}
+            onChange={(e) =>
+              setSettings({ ...settings, unbacked_nudge_enabled: e.target.checked })
+            }
+          />{" "}
+          Email when a new guest has no backup job
+        </label>
+        <p className="help">
+          Last reminder: <strong>{formatWhen(settings.unbacked_nudge_last_sent_at)}</strong>
+        </p>
+        <div className="row-actions">
+          <button className="btn" type="submit">
+            Save backup reminder
           </button>
         </div>
       </form>

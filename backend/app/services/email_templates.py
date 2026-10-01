@@ -2,8 +2,8 @@
 Purpose: Default notification templates and proof sections for restore emails.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-09-17
-Version: 1.3.0
+Modified: 2026-10-01
+Version: 1.4.0
 """
 
 from __future__ import annotations
@@ -419,8 +419,60 @@ def build_gap_alert_email(payload: dict[str, Any], app_url: str) -> tuple[str, s
     return subject, body
 
 
-def html_to_plain(html: str) -> str:
-    text = re.sub(r"<br\s*/?>", "\n", html, flags=re.I)
+def build_unbacked_nudge_email(guests: list[Any], app_url: str) -> tuple[str, str]:
+    """One email listing guests first seen without a Proxmox backup job."""
+    count = len(guests)
+    if count == 1:
+        name = str(getattr(guests[0], "name", "") or "guest")
+        subject = f"RestoreProof: {name} has no backup job"
+    else:
+        subject = f"RestoreProof: {count} guests have no backup job"
+    rows = []
+    for guest in guests:
+        name = html.escape(str(getattr(guest, "name", "") or "guest"))
+        vmid = html.escape(str(getattr(guest, "vmid", "")))
+        kind = html.escape(guest_type_label(str(getattr(guest, "guest_type", "") or "")))
+        node = html.escape(str(getattr(guest, "node", "") or "unknown"))
+        rows.append(
+            "<tr>"
+            f'<td style="padding:7px 8px 7px 0;"><strong>{name}</strong></td>'
+            f'<td style="padding:7px 8px;font-family:ui-monospace,monospace;">{vmid}</td>'
+            f'<td style="padding:7px 8px;">{kind}</td>'
+            f'<td style="padding:7px 0 7px 8px;">{node}</td>'
+            "</tr>"
+        )
+    row_html = "\n".join(rows)
+    guests_url = html.escape(app_url.rstrip("/") + "/guests")
+    body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#eef2f6;font-family:Segoe UI,Helvetica,Arial,sans-serif;">
+  <div style="max-width:620px;margin:24px auto;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 8px 32px rgba(15,28,46,0.1);">
+    <div style="background:linear-gradient(135deg,#b45309,#f59e0b);padding:28px 26px;color:#ffffff;">
+      <div style="font-size:12px;opacity:0.9;letter-spacing:0.08em;text-transform:uppercase;">RestoreProof</div>
+      <h1 style="margin:10px 0 0;font-size:24px;font-weight:700;line-height:1.3;">New guests with no backup job</h1>
+    </div>
+    <div style="padding:26px;color:#1e293b;line-height:1.65;font-size:15px;">
+      <p style="margin-top:0;">These guests showed up on the latest inventory sync and have no Proxmox backup job. Add them under Datacenter → Backup if you want them backed up. Each guest is listed once.</p>
+      <table style="width:100%;border-collapse:collapse;margin:18px 0;font-size:14px;">
+        <tr>
+          <td style="padding:7px 8px 7px 0;color:#64748b;">Name</td>
+          <td style="padding:7px 8px;color:#64748b;">VMID</td>
+          <td style="padding:7px 8px;color:#64748b;">Type</td>
+          <td style="padding:7px 0 7px 8px;color:#64748b;">Node</td>
+        </tr>
+        {row_html}
+      </table>
+      <a href="{guests_url}" style="display:inline-block;margin-top:8px;padding:13px 22px;background:#b45309;color:#ffffff;text-decoration:none;border-radius:10px;font-weight:600;font-size:14px;">Open guests</a>
+    </div>
+  </div>
+</body>
+</html>"""
+    return subject, body
+
+
+def html_to_plain(html_body: str) -> str:
+    text = re.sub(r"<br\s*/?>", "\n", html_body, flags=re.I)
     text = re.sub(r"</p>", "\n\n", text, flags=re.I)
     text = re.sub(r"</tr>", "\n", text, flags=re.I)
     text = re.sub(r"<[^>]+>", "", text)

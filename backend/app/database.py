@@ -2,8 +2,8 @@
 Purpose: SQLAlchemy engine and session helpers.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-09-27
-Version: 1.11.0
+Modified: 2026-10-01
+Version: 1.12.0
 """
 
 from collections.abc import Generator
@@ -82,6 +82,19 @@ def ensure_schema() -> None:
           AND COALESCE(s.notified_at_backfilled, FALSE) = FALSE
         """,
         "UPDATE app_settings SET notified_at_backfilled = TRUE",
+        "ALTER TABLE guests ADD COLUMN IF NOT EXISTS backup_nudge_sent_at TIMESTAMPTZ",
+        "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS unbacked_nudge_enabled BOOLEAN DEFAULT TRUE",
+        "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS unbacked_nudge_last_sent_at TIMESTAMPTZ",
+        "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS unbacked_nudge_backfilled BOOLEAN DEFAULT FALSE",
+        # One-shot: guests already in inventory were not "new". Do not email them.
+        """
+        UPDATE guests AS g
+        SET backup_nudge_sent_at = NOW()
+        FROM app_settings AS s
+        WHERE g.backup_nudge_sent_at IS NULL
+          AND COALESCE(s.unbacked_nudge_backfilled, FALSE) = FALSE
+        """,
+        "UPDATE app_settings SET unbacked_nudge_backfilled = TRUE",
     ]
     with engine.begin() as conn:
         for stmt in statements:

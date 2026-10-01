@@ -2,8 +2,8 @@
 Purpose: Export and import RestoreProof configuration for VM rebuild or migration.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-09-17
-Version: 1.4.0
+Modified: 2026-10-01
+Version: 1.5.0
 """
 
 from __future__ import annotations
@@ -46,6 +46,7 @@ APP_SETTINGS_FIELDS = (
     "update_check_enabled",
     "gap_alert_enabled",
     "gap_alert_hours",
+    "unbacked_nudge_enabled",
     "email_success_subject",
     "email_failure_subject",
     "email_success_body",
@@ -354,6 +355,7 @@ def import_config_bundle(
                 vmid=int(vmid),
                 guest_type="qemu",
                 name=f"guest-{vmid}",
+                backup_nudge_sent_at=datetime.now(timezone.utc),
             )
             db.add(guest)
             db.flush()

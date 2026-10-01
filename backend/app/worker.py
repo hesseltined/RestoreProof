@@ -2,8 +2,8 @@
 Purpose: Background worker — process queued restores, schedule rotation, retention.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-09-17
-Version: 1.9.0
+Modified: 2026-10-01
+Version: 1.10.0
 """
 
 from __future__ import annotations
@@ -18,7 +18,11 @@ from app.database import Base, SessionLocal, engine, ensure_schema
 from app.models import RestoreRun
 from app.services.bootstrap import ensure_defaults, get_app_settings
 from app.services.heartbeat import maybe_send_heartbeat
-from app.services.notifications import flush_schedule_digests, maybe_send_gap_alert
+from app.services.notifications import (
+    flush_schedule_digests,
+    maybe_send_gap_alert,
+    maybe_send_unbacked_nudge,
+)
 from app.services.restore import (
     execute_restore_run,
     recover_orphaned_runs,
@@ -121,6 +125,7 @@ def maybe_enqueue_scheduled() -> None:
 async def _flush_alerts(db) -> None:
     await flush_schedule_digests(db)
     await maybe_send_gap_alert(db)
+    await maybe_send_unbacked_nudge(db)
 
 
 def main() -> None:

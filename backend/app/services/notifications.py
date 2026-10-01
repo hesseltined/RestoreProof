@@ -1,9 +1,9 @@
 """
-Purpose: Nightly restore digests and schedule-gap alerts (missing drills).
+Purpose: Nightly restore digests, schedule-gap alerts, and new-guest backup nudges.
 Author: Doug Hesseltine
 Created: 2026-09-15
-Modified: 2026-09-17
-Version: 1.1.0
+Modified: 2026-10-01
+Version: 1.2.0
 """
 
 from __future__ import annotations
@@ -14,16 +14,17 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.models import Guest, RestoreRun
+from app.models import Guest, ProxmoxHost, RestoreRun
 from app.services.bootstrap import get_app_settings, get_push_settings, public_app_url
 from app.services.email_templates import (
     build_digest_email,
     build_gap_alert_email,
+    build_unbacked_nudge_email,
     format_timestamp,
 )
 from app.services.mailer import parse_addr_list, send_email
 from app.services.pusher import build_digest_push, build_gap_push, send_push
-from app.services.scheduler import eligible_guests, pick_next_guest
+from app.services.scheduler import eligible_guests, pick_next_guest, schedule_window_start
 
 logger = logging.getLogger(__name__)
 
@@ -310,4 +311,97 @@ async def maybe_send_gap_alert(db: Session, *, now: Optional[datetime] = None) -
         logger.warning(
             "Gap alert due but no email/push delivered (check SMTP and ntfy settings)"
         )
+    return delivered
+
+
+def pending_unbacked_guests(db: Session) -> list[Guest]:
+    """Guests first seen without a backup job that have not been emailed yet."""
+    return (
+        db.query(Guest)
+        .filter(
+            Guest.backup_nudge_sent_at.is_(None),
+            Guest.in_backup_job.is_(False),
+            Guest.excluded.is_(False),
+        )
+        .order_by(Guest.host_id.asc(), Guest.vmid.asc())
+        .all()
+    )
+
+
+def _hosts_synced_this_window(db: Session, window_start: datetime) -> bool:
+    hosts = (
+        db.query(ProxmoxHost)
+        .filter(ProxmoxHost.enabled.is_(True))
+        .order_by(ProxmoxHost.id.asc())
+        .all()
+    )
+    if not hosts:
+        return False
+    for host in hosts:
+        synced = _aware(host.last_sync_at)
+        if synced is None or synced < window_start:
+            return False
+    return True
+
+
+async def _deliver_unbacked_nudge(db: Session, guests: list[Guest]) -> bool:
+    settings = get_app_settings(db)
+    to_addrs = parse_addr_list(settings.notify_to)
+    if not to_addrs:
+        logger.warning("Unbacked-guest email skipped: no notification recipients")
+        return False
+    app_url = public_app_url(settings)
+    subject, body = build_unbacked_nudge_email(guests, app_url)
+    try:
+        await send_email(
+            db,
+            to_addrs=to_addrs,
+            subject=subject,
+            body=body,
+            cc_addrs=parse_addr_list(settings.notify_cc),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("Unbacked-guest email failed")
+        return False
+    return True
+
+
+async def maybe_send_unbacked_nudge(db: Session, *, now: Optional[datetime] = None) -> bool:
+    """
+    Once per schedule window, email guests first seen with no backup job.
+
+    Existing guests are stamped at upgrade time and are never included.
+    A guest is stamped after a successful send, so later windows stay quiet.
+    """
+    settings = get_app_settings(db)
+    if not getattr(settings, "unbacked_nudge_enabled", True):
+        return False
+    if not settings.schedule_enabled:
+        return False
+    now = now or _now()
+    window = schedule_window_start(settings.global_cron or "0 2 * * *", now)
+    last_sent = _aware(getattr(settings, "unbacked_nudge_last_sent_at", None))
+    if last_sent is not None and last_sent >= window:
+        return False
+    if not _hosts_synced_this_window(db, window):
+        return False
+
+    pending = pending_unbacked_guests(db)
+    delivered = False
+    if pending:
+        delivered = await _deliver_unbacked_nudge(db, pending)
+        if delivered:
+            for guest in pending:
+                guest.backup_nudge_sent_at = now
+            logger.info(
+                "Unbacked-guest email sent for %s guest(s)",
+                len(pending),
+            )
+        else:
+            logger.warning(
+                "Unbacked-guest email due for %s guest(s) but not delivered",
+                len(pending),
+            )
+    settings.unbacked_nudge_last_sent_at = now
+    db.commit()
     return delivered

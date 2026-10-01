@@ -2,8 +2,8 @@
 Purpose: Unit tests for nightly restore digests and schedule-gap alerts.
 Author: Doug Hesseltine
 Created: 2026-09-15
-Modified: 2026-09-17
-Version: 1.1.0
+Modified: 2026-10-01
+Version: 1.2.0
 """
 
 from __future__ import annotations
@@ -14,13 +14,14 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.bootstrap import public_app_url
-from app.services.email_templates import build_digest_email
+from app.services.email_templates import build_digest_email, build_unbacked_nudge_email
 from app.services.notifications import (
     evaluate_gap,
+    maybe_send_unbacked_nudge,
     schedule_digest_should_wait,
     send_schedule_digests,
 )
-from app.services.restore import notify_run
+from app.services.restore import notify_run, stamp_new_guest_if_backed_up
 
 NOW = datetime(2026, 9, 16, 3, 0, tzinfo=timezone.utc)
 
@@ -294,3 +295,152 @@ def test_new_schedule_with_eligible_guests_is_not_a_gap() -> None:
         "app.services.notifications.get_app_settings", return_value=_settings()
     ), patch("app.services.notifications.eligible_guests", return_value=[object()]):
         assert evaluate_gap(db, now=NOW) is None
+
+
+def _guest(**kw) -> SimpleNamespace:
+    base = {
+        "name": "PGProPainting",
+        "vmid": 141,
+        "guest_type": "lxc",
+        "node": "pve2",
+        "in_backup_job": False,
+        "excluded": False,
+        "backup_nudge_sent_at": None,
+    }
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_unbacked_email_lists_every_new_guest_once() -> None:
+    painting = _guest()
+    win = _guest(name="Win11Pro-AI", vmid=140, guest_type="qemu")
+    subject, body = build_unbacked_nudge_email(
+        [win, painting], "https://restoreproof.technologist.services"
+    )
+    assert subject == "RestoreProof: 2 guests have no backup job"
+    assert "Win11Pro-AI" in body
+    assert "PGProPainting" in body
+    assert ">140<" in body
+    assert ">141<" in body
+    assert "https://restoreproof.technologist.services/guests" in body
+    assert "Each guest is listed once." in body
+
+
+def test_unbacked_email_names_a_single_guest() -> None:
+    subject, _body = build_unbacked_nudge_email(
+        [_guest()], "https://restoreproof.technologist.services"
+    )
+    assert subject == "RestoreProof: PGProPainting has no backup job"
+
+
+def test_unbacked_nudge_sends_one_email_and_stamps_guests() -> None:
+    guest = _guest()
+    settings = _settings(global_cron="45 3 * * *", unbacked_nudge_last_sent_at=None)
+    db = MagicMock()
+    with patch(
+        "app.services.notifications.get_app_settings", return_value=settings
+    ), patch(
+        "app.services.notifications._hosts_synced_this_window", return_value=True
+    ), patch(
+        "app.services.notifications.pending_unbacked_guests", return_value=[guest]
+    ), patch(
+        "app.services.notifications.public_app_url",
+        return_value="https://restoreproof.technologist.services",
+    ), patch(
+        "app.services.notifications.send_email", new_callable=AsyncMock
+    ) as send:
+        sent = asyncio.run(maybe_send_unbacked_nudge(db, now=NOW))
+    assert sent is True
+    send.assert_awaited_once()
+    assert send.await_args.kwargs["subject"] == "RestoreProof: PGProPainting has no backup job"
+    assert send.await_args.kwargs["to_addrs"] == ["ops@example.com"]
+    assert guest.backup_nudge_sent_at == NOW
+    assert settings.unbacked_nudge_last_sent_at == NOW
+
+
+def test_unbacked_nudge_skips_after_this_window_already_sent() -> None:
+    settings = _settings(global_cron="45 3 * * *", unbacked_nudge_last_sent_at=NOW)
+    db = MagicMock()
+    with patch(
+        "app.services.notifications.get_app_settings", return_value=settings
+    ), patch(
+        "app.services.notifications.send_email", new_callable=AsyncMock
+    ) as send:
+        sent = asyncio.run(maybe_send_unbacked_nudge(db, now=NOW))
+    assert sent is False
+    send.assert_not_called()
+
+
+def test_unbacked_nudge_waits_until_inventory_sync() -> None:
+    settings = _settings(global_cron="45 3 * * *", unbacked_nudge_last_sent_at=None)
+    db = MagicMock()
+    with patch(
+        "app.services.notifications.get_app_settings", return_value=settings
+    ), patch(
+        "app.services.notifications._hosts_synced_this_window", return_value=False
+    ), patch(
+        "app.services.notifications.pending_unbacked_guests"
+    ) as pending, patch(
+        "app.services.notifications.send_email", new_callable=AsyncMock
+    ) as send:
+        sent = asyncio.run(maybe_send_unbacked_nudge(db, now=NOW))
+    assert sent is False
+    pending.assert_not_called()
+    send.assert_not_called()
+    assert settings.unbacked_nudge_last_sent_at is None
+
+
+def test_unbacked_nudge_marks_quiet_window_without_email() -> None:
+    settings = _settings(global_cron="45 3 * * *", unbacked_nudge_last_sent_at=None)
+    db = MagicMock()
+    with patch(
+        "app.services.notifications.get_app_settings", return_value=settings
+    ), patch(
+        "app.services.notifications._hosts_synced_this_window", return_value=True
+    ), patch(
+        "app.services.notifications.pending_unbacked_guests", return_value=[]
+    ), patch(
+        "app.services.notifications.send_email", new_callable=AsyncMock
+    ) as send:
+        sent = asyncio.run(maybe_send_unbacked_nudge(db, now=NOW))
+    assert sent is False
+    send.assert_not_called()
+    assert settings.unbacked_nudge_last_sent_at == NOW
+
+
+def test_unbacked_nudge_leaves_guest_pending_when_email_fails() -> None:
+    guest = _guest()
+    settings = _settings(global_cron="45 3 * * *", unbacked_nudge_last_sent_at=None)
+    db = MagicMock()
+    with patch(
+        "app.services.notifications.get_app_settings", return_value=settings
+    ), patch(
+        "app.services.notifications._hosts_synced_this_window", return_value=True
+    ), patch(
+        "app.services.notifications.pending_unbacked_guests", return_value=[guest]
+    ), patch(
+        "app.services.notifications.public_app_url",
+        return_value="https://restoreproof.technologist.services",
+    ), patch(
+        "app.services.notifications.send_email",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("smtp down"),
+    ):
+        sent = asyncio.run(maybe_send_unbacked_nudge(db, now=NOW))
+    assert sent is False
+    assert guest.backup_nudge_sent_at is None
+    assert settings.unbacked_nudge_last_sent_at == NOW
+
+
+def test_stamp_skips_nudge_when_new_guest_already_has_a_job() -> None:
+    backed = _guest(in_backup_job=True)
+    stamp_new_guest_if_backed_up(backed, is_new=True, now=NOW)
+    assert backed.backup_nudge_sent_at == NOW
+
+    unbacked = _guest()
+    stamp_new_guest_if_backed_up(unbacked, is_new=True, now=NOW)
+    assert unbacked.backup_nudge_sent_at is None
+
+    existing = _guest(in_backup_job=True)
+    stamp_new_guest_if_backed_up(existing, is_new=False, now=NOW)
+    assert existing.backup_nudge_sent_at is None

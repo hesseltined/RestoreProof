@@ -2,8 +2,8 @@
 Purpose: SQLAlchemy ORM models for RestoreProof.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-09-27
-Version: 1.12.0
+Modified: 2026-10-01
+Version: 1.13.0
 """
 
 from __future__ import annotations
@@ -91,6 +91,13 @@ class AppSettings(Base):
     gap_alert_last_sent_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # One email per schedule window listing guests first seen with no backup job.
+    unbacked_nudge_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    unbacked_nudge_last_sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # One-shot: existing guests are already known, so the first upgrade does not email them.
+    unbacked_nudge_backfilled: Mapped[bool] = mapped_column(Boolean, default=True)
     # One-shot flag for the notified_at backfill in ensure_schema. Not an API field.
     notified_at_backfilled: Mapped[bool] = mapped_column(Boolean, default=True)
     email_success_subject: Mapped[str] = mapped_column(
@@ -222,6 +229,11 @@ class Guest(Base):
     # PBS snapshot inventory seen at last host sync
     backup_snapshot_count: Mapped[int] = mapped_column(Integer, default=0)
     last_backup_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Set after the one-time "no backup job" email, or when the guest already
+    # had a backup job the first time RestoreProof saw it. Null = still pending.
+    backup_nudge_sent_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     schedule_cron: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)

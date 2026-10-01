@@ -2,8 +2,8 @@
 Purpose: RestoreProof FastAPI application entrypoint.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-09-27
-Version: 1.6.6
+Modified: 2026-10-01
+Version: 1.6.7
 """
 
 from __future__ import annotations

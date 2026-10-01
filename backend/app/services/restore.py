@@ -2,8 +2,8 @@
 Purpose: Full restore → boot → evidence → cleanup cycle for one guest.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-09-27
-Version: 1.18.0
+Modified: 2026-10-01
+Version: 1.19.0
 """
 
 from __future__ import annotations
@@ -676,6 +676,19 @@ def _refuse_duplicate_cluster(db: Session, host: ProxmoxHost, client: ProxmoxCli
     raise RuntimeError(message)
 
 
+def stamp_new_guest_if_backed_up(
+    guest: Guest,
+    *,
+    is_new: bool,
+    now: Optional[datetime] = None,
+) -> None:
+    """A guest that already has a backup job on first sight never gets a nudge email."""
+    if not is_new or not guest.in_backup_job:
+        return
+    if guest.backup_nudge_sent_at is None:
+        guest.backup_nudge_sent_at = now or datetime.now(timezone.utc)
+
+
 def sync_host_guests(db: Session, host: ProxmoxHost) -> int:
     client = _client_for_host(host)
     client.version()
@@ -700,6 +713,7 @@ def sync_host_guests(db: Session, host: ProxmoxHost) -> int:
         return backup_index[node].get(int(vmid), [])
 
     seen: set[int] = set()
+    new_vmids: set[int] = set()
     count = 0
     for res in resources:
         vmid = res.get("vmid")
@@ -719,6 +733,7 @@ def sync_host_guests(db: Session, host: ProxmoxHost) -> int:
         if not guest:
             guest = Guest(host_id=host.id, vmid=int(vmid), guest_type=rtype)
             db.add(guest)
+            new_vmids.add(int(vmid))
         guest.name = res.get("name") or guest.name or f"{rtype}-{vmid}"
         guest.guest_type = rtype
         guest.node = res.get("node") or guest.node
@@ -753,6 +768,7 @@ def sync_host_guests(db: Session, host: ProxmoxHost) -> int:
             j.get("enabled", 1) not in (0, False, "0", "false", "False") for j in matching
         )
         g.backup_job_summary = _backup_job_summary(matching) if matching else ""
+        stamp_new_guest_if_backed_up(g, is_new=g.vmid in new_vmids)
 
         snapshots = backups_for(g.node, g.vmid)
         g.backup_snapshot_count = len(snapshots)

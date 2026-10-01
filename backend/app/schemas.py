@@ -2,8 +2,8 @@
 Purpose: Pydantic request/response schemas.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-09-17
-Version: 1.14.0
+Modified: 2026-10-01
+Version: 1.15.0
 """
 
 from __future__ import annotations
@@ -80,6 +80,8 @@ class AppSettingsOut(BaseModel):
     gap_alert_enabled: bool = True
     gap_alert_hours: int = 26
     gap_alert_last_sent_at: Optional[datetime] = None
+    unbacked_nudge_enabled: bool = True
+    unbacked_nudge_last_sent_at: Optional[datetime] = None
     email_success_subject: str
     email_failure_subject: str
     email_success_body: str
@@ -106,6 +108,7 @@ class AppSettingsUpdate(BaseModel):
     update_check_enabled: Optional[bool] = None
     gap_alert_enabled: Optional[bool] = None
     gap_alert_hours: Optional[int] = Field(default=None, ge=1, le=168)
+    unbacked_nudge_enabled: Optional[bool] = None
     email_success_subject: Optional[str] = None
     email_failure_subject: Optional[str] = None
     email_success_body: Optional[str] = None

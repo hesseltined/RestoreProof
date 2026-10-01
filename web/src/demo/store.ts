@@ -115,6 +115,8 @@ export type DemoSettings = {
   gap_alert_enabled: boolean;
   gap_alert_hours: number;
   gap_alert_last_sent_at: string | null;
+  unbacked_nudge_enabled: boolean;
+  unbacked_nudge_last_sent_at: string | null;
   email_success_subject: string;
   email_failure_subject: string;
   email_success_body: string;
@@ -815,6 +817,8 @@ function createStore() {
     gap_alert_enabled: true,
     gap_alert_hours: 26,
     gap_alert_last_sent_at: null,
+    unbacked_nudge_enabled: true,
+    unbacked_nudge_last_sent_at: null,
     email_success_subject: "✅ RestoreProof passed — {{guest_name}} (VMID {{vmid}})",
     email_failure_subject: "❌ RestoreProof failed — {{guest_name}} (VMID {{vmid}})",
     email_success_body: SUCCESS_BODY,

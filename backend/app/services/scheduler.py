@@ -2,8 +2,8 @@
 Purpose: Schedule helpers — due times, batch windows, coverage planning.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-07-31
-Version: 1.4.0
+Modified: 2026-10-19
+Version: 1.5.0
 """
 
 from __future__ import annotations
@@ -16,12 +16,13 @@ from croniter import croniter
 from sqlalchemy.orm import Session
 
 from app.models import Guest, ProxmoxHost, RestoreRun
+from app.services.backup_health import assess_backup, fleet_backup_report
 from app.services.bootstrap import get_app_settings
 
 
-def is_restorable(guest: Guest) -> bool:
-    """A guest can only be drilled if a backup job covers it and a snapshot exists."""
-    return bool(guest.in_backup_job) and int(guest.backup_snapshot_count or 0) > 0
+def is_restorable(guest: Guest, now: Optional[datetime] = None) -> bool:
+    """A drill counts only when the backup job is enabled and the snapshot is current."""
+    return assess_backup(guest, now)["status"] == "current"
 
 
 def effective_cron(guest: Guest, global_cron: str) -> Optional[str]:
@@ -96,18 +97,17 @@ def suggested_batch(eligible: int, ticks: float) -> int:
 
 
 def eligible_guests(db: Session) -> list[Guest]:
-    return (
+    rows = (
         db.query(Guest)
         .join(ProxmoxHost, Guest.host_id == ProxmoxHost.id)
         .filter(
             Guest.excluded.is_(False),
             Guest.schedule_enabled.is_(True),
-            Guest.in_backup_job.is_(True),
-            Guest.backup_snapshot_count > 0,
             ProxmoxHost.enabled.is_(True),
         )
         .all()
     )
+    return [guest for guest in rows if is_restorable(guest)]
 
 
 def enqueued_in_window(db: Session, window_start: datetime) -> int:
@@ -199,8 +199,10 @@ def build_schedule_plan(db: Session) -> dict:
         )
         .count()
     )
-    # Eligible = not excluded, schedule_enabled, in a backup job, and has a snapshot
+    # Eligible = job enabled, snapshot inside the job schedule, not excluded.
     eligible = len(eligible_guests(db))
+    monitored = db.query(Guest).filter(Guest.excluded.is_(False)).all()
+    backup_report = fleet_backup_report(monitored)
     cron = settings.global_cron or "0 2 * * *"
     batch = max(1, int(settings.schedule_batch_size or 1))
     goal = (settings.schedule_coverage_goal or "monthly").lower()
@@ -222,7 +224,12 @@ def build_schedule_plan(db: Session) -> dict:
     enqueued = enqueued_in_window(db, window_start)
     remaining = max(0, batch - enqueued)
 
-    if eligible == 0:
+    if eligible == 0 and backup_report["disabled_count"]:
+        summary = (
+            "No guests are eligible for restore tests. "
+            f"{backup_report['disabled_count']} guest(s) are on a disabled backup job."
+        )
+    elif eligible == 0:
         summary = (
             "No eligible guests yet (sync inventory, ensure guests are listed in a Proxmox "
             "backup job, and un-exclude guests you want tested)."
@@ -248,6 +255,16 @@ def build_schedule_plan(db: Session) -> dict:
         summary += (
             f" {no_snapshot} guest(s) are in a backup job but have no PBS snapshot yet "
             "and are skipped until their first backup completes."
+        )
+    if backup_report["disabled_count"] and eligible:
+        summary += (
+            f" {backup_report['disabled_count']} guest(s) are on a disabled backup job "
+            "and are not restore-tested until that job is enabled."
+        )
+    if backup_report["stale_count"]:
+        summary += (
+            f" {backup_report['stale_count']} guest(s) have a snapshot older than the "
+            "backup schedule and are skipped until a new backup exists."
         )
 
     return {

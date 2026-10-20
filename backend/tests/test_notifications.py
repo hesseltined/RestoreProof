@@ -2,8 +2,8 @@
 Purpose: Unit tests for nightly restore digests and schedule-gap alerts.
 Author: Doug Hesseltine
 Created: 2026-09-15
-Modified: 2026-10-01
-Version: 1.2.0
+Modified: 2026-10-20
+Version: 1.3.0
 """
 
 from __future__ import annotations
@@ -14,7 +14,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.bootstrap import public_app_url
-from app.services.email_templates import build_digest_email, build_unbacked_nudge_email
+from app.services.email_templates import (
+    backup_age_days,
+    build_digest_email,
+    build_unbacked_nudge_email,
+    format_backup_age_html,
+    parse_backup_ctime,
+)
 from app.services.notifications import (
     evaluate_gap,
     maybe_send_unbacked_nudge,
@@ -237,6 +243,58 @@ def test_digest_html_open_links_use_live_url() -> None:
     assert "1 passed" in body
     assert "1 failed" in body
     assert subject == "RestoreProof: 1 passed, 1 failed"
+
+
+def test_parse_backup_ctime_from_pbs_volid() -> None:
+    when = parse_backup_ctime("pvebackup:backup/ct/137/2026-10-19T19:56:08Z")
+    assert when == datetime(2026, 10, 19, 19, 56, 8, tzinfo=timezone.utc)
+
+
+def test_parse_backup_ctime_from_vzdump_and_summary() -> None:
+    when = parse_backup_ctime(
+        "local:backup/vzdump-lxc-137-2026_10_19-19_56_08.tar.zst"
+    )
+    assert when == datetime(2026, 10, 19, 19, 56, 8, tzinfo=timezone.utc)
+    when = parse_backup_ctime(
+        "pbs:backup/ct/1/x",
+        result_summary="Backup: pbs:x (2026-10-19 19:56 UTC, ~1.0 GiB)",
+    )
+    assert when == datetime(2026, 10, 19, 19, 56, tzinfo=timezone.utc)
+
+
+def test_backup_age_days_and_html_colors() -> None:
+    backup = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+    as_of = datetime(2026, 10, 20, 3, 0, tzinfo=timezone.utc)
+    assert backup_age_days(backup, as_of) == 19
+    assert "#dc2626" in format_backup_age_html(19)
+    assert "rp-age-flash" in format_backup_age_html(19)
+    assert "#ea580c" in format_backup_age_html(8)
+    assert "rp-age-flash" not in format_backup_age_html(8)
+    assert "#15803d" in format_backup_age_html(1)
+
+
+def test_digest_shows_backup_age() -> None:
+    ok = _run(
+        id=10,
+        status="success",
+        source_name="authentik",
+        backup_volid="pvebackup:backup/ct/137/2026-10-19T19:56:08Z",
+        finished_at=datetime(2026, 10, 20, 3, 51, tzinfo=timezone.utc),
+    )
+    stale = _run(
+        id=11,
+        status="success",
+        source_name="old-guest",
+        backup_volid="pvebackup:backup/vm/99/2026-09-20T12:00:00Z",
+        finished_at=datetime(2026, 10, 20, 3, 51, tzinfo=timezone.utc),
+    )
+    _, body = build_digest_email([ok, stale], "https://rp.example")
+    assert "Age:" in body
+    assert "1 day old" in body
+    assert "30 days old" in body
+    assert "#dc2626" in body
+    assert "rp-age-flash" in body
+    assert "@keyframes rp-age-flash" in body
 
 
 def _gap_db(last) -> MagicMock:

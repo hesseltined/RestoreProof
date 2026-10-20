@@ -2,8 +2,8 @@
  * Purpose: SMTP presets, push (ntfy) delivery, and notification templates.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-10-01
- * Version: 1.11.0
+ * Modified: 2026-10-20
+ * Version: 1.12.0
  */
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
@@ -800,8 +800,8 @@ export function NotificationsPage() {
         <p className="help">
           Variables: guest_name, vmid, guest_type, guest_type_label, test_vmid, backup_volid,
           backup_count, backup_used_index, latest_backup_volid, used_fallback_backup,
-          result_summary, error_message, started_at, finished_at, run_url, status, evidence_kind,
-          proof_section
+          backup_age_days, backup_age_label, backup_age_html, result_summary, error_message,
+          started_at, finished_at, run_url, status, evidence_kind, proof_section
         </p>
         <div className="row-actions">
           <button className="btn" type="submit">

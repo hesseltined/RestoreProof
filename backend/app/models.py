@@ -2,8 +2,8 @@
 Purpose: SQLAlchemy ORM models for RestoreProof.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-10-01
-Version: 1.13.0
+Modified: 2026-10-19
+Version: 1.15.0
 """
 
 from __future__ import annotations
@@ -91,6 +91,11 @@ class AppSettings(Base):
     gap_alert_last_sent_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Daily alert while a backup job is disabled or the newest snapshot is stale.
+    backup_health_alert_last_sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    backup_health_alert_fingerprint: Mapped[str] = mapped_column(String(4000), default="")
     # One email per schedule window listing guests first seen with no backup job.
     unbacked_nudge_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     unbacked_nudge_last_sent_at: Mapped[Optional[datetime]] = mapped_column(
@@ -213,6 +218,8 @@ class Guest(Base):
     vmid: Mapped[int] = mapped_column(Integer, index=True)
     name: Mapped[str] = mapped_column(String(255), default="")
     guest_type: Mapped[str] = mapped_column(String(16))  # qemu | lxc
+    # Short OS name from Proxmox ostype (Windows, Linux, Debian, Ubuntu, …)
+    os_label: Mapped[str] = mapped_column(String(64), default="")
     node: Mapped[str] = mapped_column(String(120), default="")
     status: Mapped[str] = mapped_column(String(64), default="")
     # Specs from Proxmox cluster/resources (refreshed on host sync)
@@ -226,6 +233,8 @@ class Guest(Base):
     backup_job_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     # Comma-separated job ids / schedules for UI (e.g. "backup-abc (sun 01:00)")
     backup_job_summary: Mapped[str] = mapped_column(String(512), default="")
+    # Schedule of the covering job used to decide if the newest snapshot is current.
+    backup_schedule: Mapped[str] = mapped_column(String(120), default="")
     # PBS snapshot inventory seen at last host sync
     backup_snapshot_count: Mapped[int] = mapped_column(Integer, default=0)
     last_backup_at: Mapped[Optional[datetime]] = mapped_column(
@@ -268,6 +277,8 @@ class RestoreRun(Base):
     source_vmid: Mapped[int] = mapped_column(Integer)
     source_name: Mapped[str] = mapped_column(String(255), default="")
     guest_type: Mapped[str] = mapped_column(String(16), default="qemu")
+    # Copied from the guest at run time so history keeps the OS after a rename.
+    os_label: Mapped[str] = mapped_column(String(64), default="")
     test_vmid: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     backup_volid: Mapped[str] = mapped_column(String(512), default="")
     # Inventory / fallback metadata (set during restore)

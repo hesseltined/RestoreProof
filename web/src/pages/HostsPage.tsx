@@ -2,8 +2,8 @@
  * Purpose: Proxmox host connections, API/SSH tests, sync, latest restore evidence.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-09-27
- * Version: 1.6.0
+ * Modified: 2026-10-07
+ * Version: 1.6.1
  */
 
 import { FormEvent, useEffect, useState } from "react";
@@ -284,7 +284,7 @@ export function HostsPage() {
             <label>API URL</label>
             <input
               required
-              placeholder="https://10.250.0.11:8006"
+              placeholder="https://pve.example:8006"
               value={form.api_url}
               onChange={(e) => setForm({ ...form, api_url: e.target.value })}
             />

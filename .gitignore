@@ -8,6 +8,7 @@ node_modules/
 web/dist/
 .DS_Store
 data/
+tmp/
 *.ppm
 .idea/
 .vscode/

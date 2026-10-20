@@ -2,8 +2,8 @@
  * Purpose: Client-side mock API for RestoreProof /demo (no backend, no login).
  * Author: Doug Hesseltine
  * Created: 2026-07-13
- * Modified: 2026-09-17
- * Version: 2.6.0
+ * Modified: 2026-10-07
+ * Version: 2.8.0
  */
 
 import { APP_VERSION } from "../version";
@@ -133,6 +133,7 @@ function queueRunForGuest(
     source_vmid: guest.vmid,
     source_name: guest.name,
     guest_type: guest.guest_type,
+    os_label: guest.os_label,
     test_vmid: 9000 + (store.nextRunId % 50),
     backup_volid: `pbs:backup/${guest.guest_type === "lxc" ? "ct" : "vm"}/${guest.vmid}/${new Date().toISOString()}`,
     backup_count: 12,
@@ -511,7 +512,7 @@ export async function demoApiFetch(path: string, options: RequestInit = {}): Pro
       if (!host) return err(404, "Host not found");
       host.api_ok_at = new Date().toISOString();
       host.last_error = null;
-      return json({ ok: true, nodes: ["pve1", "pve2"] });
+      return json({ ok: true, nodes: ["dc-pve1"] });
     }
   }
   {
@@ -578,7 +579,12 @@ export async function demoApiFetch(path: string, options: RequestInit = {}): Pro
       if (!run || run.evidence_kind !== "screenshot") {
         return new Response("Not found", { status: 404 });
       }
-      const blob = buildDemoEvidenceBlob(run.source_name, run.source_vmid);
+      const guest = store.guests.find((g) => g.id === run.guest_id);
+      const blob = buildDemoEvidenceBlob(
+        run.source_name,
+        run.source_vmid,
+        guest?.os_label || run.os_label
+      );
       return new Response(blob, {
         status: 200,
         headers: { "Content-Type": "image/svg+xml" },

@@ -2,8 +2,8 @@
 Purpose: Default notification templates and proof sections for restore emails.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-10-01
-Version: 1.4.0
+Modified: 2026-10-20
+Version: 1.6.0
 """
 
 from __future__ import annotations
@@ -20,12 +20,30 @@ from app.models import RestoreRun
 
 logger = logging.getLogger(__name__)
 
+# Thresholds for backup age highlighting in emails (days since snapshot).
+BACKUP_AGE_WARN_DAYS = 7
+BACKUP_AGE_ALERT_DAYS = 14
+
+# PBS: …/2026-10-19T19:56:08Z  |  vzdump: …-2026_10_19-19_56_08.…
+_PBS_CTIME_RE = re.compile(r"(?P<iso>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\b")
+_VZDUMP_CTIME_RE = re.compile(
+    r"(?P<y>\d{4})_(?P<m>\d{2})_(?P<d>\d{2})-(?P<H>\d{2})_(?P<M>\d{2})_(?P<S>\d{2})"
+)
+_SUMMARY_CTIME_RE = re.compile(
+    r"\((?P<y>\d{4})-(?P<m>\d{2})-(?P<d>\d{2})\s+(?P<H>\d{2}):(?P<M>\d{2})\s+UTC"
+)
+
 DEFAULT_SUCCESS_SUBJECT = "✅ RestoreProof passed — {{guest_name}} (VMID {{vmid}})"
 DEFAULT_FAILURE_SUBJECT = "❌ RestoreProof failed — {{guest_name}} (VMID {{vmid}})"
 
 DEFAULT_SUCCESS_BODY = """<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"></head>
+<head><meta charset="utf-8">
+<style>
+@keyframes rp-age-flash{0%,100%{opacity:1}50%{opacity:0.35}}
+.rp-age-flash{animation:rp-age-flash 1.2s ease-in-out infinite}
+</style>
+</head>
 <body style="margin:0;padding:0;background:#eef2f6;font-family:Segoe UI,Helvetica,Arial,sans-serif;">
   <div style="max-width:620px;margin:24px auto;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 8px 32px rgba(15,28,46,0.1);">
     <div style="background:linear-gradient(135deg,#047857,#10b981);padding:28px 26px;color:#ffffff;">
@@ -38,6 +56,7 @@ DEFAULT_SUCCESS_BODY = """<!DOCTYPE html>
         <tr><td style="padding:7px 0;color:#64748b;width:38%;">Guest type</td><td style="padding:7px 0;"><strong>{{guest_type_label}}</strong></td></tr>
         <tr><td style="padding:7px 0;color:#64748b;">Test VMID</td><td style="padding:7px 0;"><code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;">{{test_vmid}}</code></td></tr>
         <tr><td style="padding:7px 0;color:#64748b;">Backup used</td><td style="padding:7px 0;font-size:13px;word-break:break-all;">{{backup_volid}}</td></tr>
+        <tr><td style="padding:7px 0;color:#64748b;">Backup age</td><td style="padding:7px 0;">{{backup_age_html}}</td></tr>
         <tr><td style="padding:7px 0;color:#64748b;">Backups available</td><td style="padding:7px 0;">{{backup_count}}</td></tr>
         <tr><td style="padding:7px 0;color:#64748b;">Started</td><td style="padding:7px 0;">{{started_at}}</td></tr>
         <tr><td style="padding:7px 0;color:#64748b;">Finished</td><td style="padding:7px 0;">{{finished_at}}</td></tr>
@@ -55,7 +74,12 @@ DEFAULT_SUCCESS_BODY = """<!DOCTYPE html>
 
 DEFAULT_FAILURE_BODY = """<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"></head>
+<head><meta charset="utf-8">
+<style>
+@keyframes rp-age-flash{0%,100%{opacity:1}50%{opacity:0.35}}
+.rp-age-flash{animation:rp-age-flash 1.2s ease-in-out infinite}
+</style>
+</head>
 <body style="margin:0;padding:0;background:#eef2f6;font-family:Segoe UI,Helvetica,Arial,sans-serif;">
   <div style="max-width:620px;margin:24px auto;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 8px 32px rgba(15,28,46,0.1);">
     <div style="background:linear-gradient(135deg,#b91c1c,#ef4444);padding:28px 26px;color:#ffffff;">
@@ -68,6 +92,7 @@ DEFAULT_FAILURE_BODY = """<!DOCTYPE html>
       <table style="width:100%;border-collapse:collapse;margin:18px 0;font-size:14px;">
         <tr><td style="padding:7px 0;color:#64748b;width:38%;">Guest type</td><td style="padding:7px 0;"><strong>{{guest_type_label}}</strong></td></tr>
         <tr><td style="padding:7px 0;color:#64748b;">Backup tried</td><td style="padding:7px 0;font-size:13px;word-break:break-all;">{{backup_volid}}</td></tr>
+        <tr><td style="padding:7px 0;color:#64748b;">Backup age</td><td style="padding:7px 0;">{{backup_age_html}}</td></tr>
         <tr><td style="padding:7px 0;color:#64748b;">Backups available</td><td style="padding:7px 0;">{{backup_count}}</td></tr>
         <tr><td style="padding:7px 0;color:#64748b;">Used older backup</td><td style="padding:7px 0;">{{used_fallback_backup}}</td></tr>
       </table>
@@ -122,6 +147,106 @@ def format_timestamp(value: Optional[datetime]) -> str:
         return value.astimezone(timezone.utc).strftime("%b %d, %Y %H:%M UTC")
     except (TypeError, ValueError, OSError):
         return str(value)
+
+
+def parse_backup_ctime(
+    volid: Optional[str] = None,
+    *,
+    result_summary: Optional[str] = None,
+) -> Optional[datetime]:
+    """Best-effort snapshot time from a PBS/vzdump volid or result_summary line."""
+    text = (volid or "").strip()
+    if text:
+        m = _PBS_CTIME_RE.search(text)
+        if m:
+            try:
+                return datetime.strptime(m.group("iso"), "%Y-%m-%dT%H:%M:%SZ").replace(
+                    tzinfo=timezone.utc
+                )
+            except ValueError:
+                pass
+        m = _VZDUMP_CTIME_RE.search(text)
+        if m:
+            try:
+                return datetime(
+                    int(m.group("y")),
+                    int(m.group("m")),
+                    int(m.group("d")),
+                    int(m.group("H")),
+                    int(m.group("M")),
+                    int(m.group("S")),
+                    tzinfo=timezone.utc,
+                )
+            except ValueError:
+                pass
+    summary = (result_summary or "").strip()
+    if summary:
+        m = _SUMMARY_CTIME_RE.search(summary)
+        if m:
+            try:
+                return datetime(
+                    int(m.group("y")),
+                    int(m.group("m")),
+                    int(m.group("d")),
+                    int(m.group("H")),
+                    int(m.group("M")),
+                    tzinfo=timezone.utc,
+                )
+            except ValueError:
+                pass
+    return None
+
+
+def backup_age_days(
+    backup_at: Optional[datetime],
+    as_of: Optional[datetime] = None,
+) -> Optional[int]:
+    """Calendar days between snapshot UTC date and as_of UTC date. None if unknown."""
+    if backup_at is None:
+        return None
+    end = as_of or datetime.now(timezone.utc)
+    try:
+        if backup_at.tzinfo is None:
+            backup_at = backup_at.replace(tzinfo=timezone.utc)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+        days = (end.astimezone(timezone.utc).date() - backup_at.astimezone(timezone.utc).date()).days
+        return max(0, days)
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def format_backup_age_label(days: Optional[int]) -> str:
+    if days is None:
+        return "—"
+    if days == 1:
+        return "1 day"
+    return f"{days} days"
+
+
+def format_backup_age_html(days: Optional[int]) -> str:
+    """Colored age label; orange >7 days, red+flash >14 (clients that allow CSS animation)."""
+    label = html.escape(format_backup_age_label(days))
+    if days is None:
+        return f'<span style="color:#94a3b8;">{label}</span>'
+    if days > BACKUP_AGE_ALERT_DAYS:
+        return (
+            f'<span class="rp-age-flash" style="color:#dc2626;font-weight:700;">'
+            f"{label} old</span>"
+        )
+    if days > BACKUP_AGE_WARN_DAYS:
+        return f'<span style="color:#ea580c;font-weight:700;">{label} old</span>'
+    return f'<span style="color:#15803d;font-weight:600;">{label} old</span>'
+
+
+def run_backup_age_days(run: Any) -> Optional[int]:
+    """Age of the tested snapshot at restore finish time."""
+    ctime = parse_backup_ctime(
+        getattr(run, "backup_volid", None),
+        result_summary=getattr(run, "result_summary", None),
+    )
+    as_of = getattr(run, "finished_at", None) or getattr(run, "started_at", None)
+    return backup_age_days(ctime, as_of)
 
 
 def _format_uptime(seconds: Any) -> str:
@@ -232,6 +357,7 @@ def screenshot_attachment(run: RestoreRun) -> Optional[tuple[str, bytes, str]]:
 
 def build_notification_context(run: RestoreRun, app_url: str) -> dict[str, Any]:
     proof_section = build_proof_section(run)
+    age_days = run_backup_age_days(run)
     return {
         "guest_name": run.source_name,
         "vmid": run.source_vmid,
@@ -243,6 +369,9 @@ def build_notification_context(run: RestoreRun, app_url: str) -> dict[str, Any]:
         "backup_used_index": run.backup_used_index if run.backup_used_index is not None else "",
         "latest_backup_volid": run.latest_backup_volid or "",
         "used_fallback_backup": "yes" if run.used_fallback_backup else "no",
+        "backup_age_days": age_days if age_days is not None else "",
+        "backup_age_label": format_backup_age_label(age_days),
+        "backup_age_html": format_backup_age_html(age_days),
         "result_summary": run.result_summary or "",
         "error_message": run.error_message or "",
         "started_at": format_timestamp(run.started_at),
@@ -273,6 +402,7 @@ def _digest_row(run: RestoreRun, app_url: str, *, failed: bool) -> str:
     vmid = html.escape(str(run.source_vmid))
     when = html.escape(format_timestamp(run.finished_at))
     url = html.escape(f"{app_url.rstrip('/')}/runs/{run.id}")
+    age_html = format_backup_age_html(run_backup_age_days(run))
     raw = (
         (run.error_message or run.result_summary or "")[:240]
         if failed
@@ -286,7 +416,9 @@ def _digest_row(run: RestoreRun, app_url: str, *, failed: bool) -> str:
         f'border-left:5px solid {accent};vertical-align:top;">'
         f"{_status_pill(failed=failed)}"
         f'<div style="margin-top:6px;"><strong>{name}</strong></div>'
-        f'<div style="font-size:12px;color:#64748b;">VMID {vmid} · {when}</div></td>'
+        f'<div style="font-size:12px;color:#64748b;">VMID {vmid}</div>'
+        f'<div style="margin-top:4px;font-size:13px;">Age: {age_html}</div>'
+        f'<div style="font-size:12px;color:#64748b;margin-top:2px;">{when}</div></td>'
         f'<td style="padding:12px 0 12px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;'
         f'color:#334155;vertical-align:top;">{detail}</td>'
         f'<td style="padding:12px 0 12px 12px;border-bottom:1px solid #e2e8f0;'
@@ -360,7 +492,12 @@ def build_digest_email(
     dash = html.escape(app_url.rstrip("/"))
     body = f"""<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"></head>
+<head><meta charset="utf-8">
+<style>
+@keyframes rp-age-flash{{0%,100%{{opacity:1}}50%{{opacity:0.35}}}}
+.rp-age-flash{{animation:rp-age-flash 1.2s ease-in-out infinite}}
+</style>
+</head>
 <body style="margin:0;padding:0;background:#eef2f6;font-family:Segoe UI,Helvetica,Arial,sans-serif;">
   <div style="max-width:680px;margin:24px auto;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 8px 32px rgba(15,28,46,0.1);">
     <div style="background:{header_bg};padding:28px 26px;color:#ffffff;">
@@ -412,6 +549,91 @@ def build_gap_alert_email(payload: dict[str, Any], app_url: str) -> tuple[str, s
       </table>
       <p style="font-size:14px;color:#475569;">Eligible 0 usually means PBS snapshots are missing or the covering backup job is disabled. Sync inventory after PBS is back.</p>
       <a href="{dash}" style="display:inline-block;margin-top:8px;padding:13px 22px;background:#b45309;color:#ffffff;text-decoration:none;border-radius:10px;font-weight:600;font-size:14px;">Open dashboard</a>
+    </div>
+  </div>
+</body>
+</html>"""
+    return subject, body
+
+
+def build_backup_health_email(payload: dict[str, Any], app_url: str) -> tuple[str, str]:
+    """Subject+HTML when a backup job is disabled or snapshots are past the schedule."""
+    disabled = int(payload.get("disabled_count") or 0)
+    stale = int(payload.get("stale_count") or 0)
+    missing = int(payload.get("missing_count") or 0)
+    if disabled:
+        subject = "RestoreProof: backup job disabled"
+        title = "Backup job disabled"
+    elif stale:
+        subject = "RestoreProof: backups are out of date"
+        title = "Backups are out of date"
+    else:
+        subject = "RestoreProof: backup job has no snapshot"
+        title = "Backup job has no snapshot"
+    dash = html.escape(app_url.rstrip("/") or "/")
+    job_rows = []
+    for job in payload.get("disabled_jobs") or []:
+        label = html.escape(str(job.get("label") or "Backup job"))
+        count = int(job.get("guest_count") or 0)
+        oldest = html.escape(format_timestamp(job.get("oldest_backup_at")))
+        job_rows.append(
+            "<tr>"
+            f'<td style="padding:7px 8px 7px 0;"><strong>{label}</strong></td>'
+            f'<td style="padding:7px 8px;">{count}</td>'
+            f'<td style="padding:7px 0 7px 8px;">{oldest}</td>'
+            "</tr>"
+        )
+    guest_rows = []
+    shown = list(payload.get("stale_guests") or []) + list(payload.get("missing_guests") or [])
+    hidden = max(0, stale + missing - len(shown))
+    for guest in shown:
+        name = html.escape(str(guest.get("name") or "guest"))
+        vmid = html.escape(str(guest.get("vmid") or ""))
+        when = html.escape(format_timestamp(guest.get("last_backup_at")))
+        guest_rows.append(
+            "<tr>"
+            f'<td style="padding:7px 8px 7px 0;"><strong>{name}</strong></td>'
+            f'<td style="padding:7px 8px;font-family:ui-monospace,monospace;">{vmid}</td>'
+            f'<td style="padding:7px 0 7px 8px;">{when}</td>'
+            "</tr>"
+        )
+    jobs_html = ""
+    if job_rows:
+        jobs_html = (
+            '<p style="margin:16px 0 6px;font-weight:600;">Disabled jobs</p>'
+            '<table style="width:100%;border-collapse:collapse;font-size:14px;">'
+            '<tr><td style="padding:4px 8px 4px 0;color:#64748b;">Job</td>'
+            '<td style="padding:4px 8px;color:#64748b;">Guests</td>'
+            '<td style="padding:4px 0 4px 8px;color:#64748b;">Oldest snapshot</td></tr>'
+            + "\n".join(job_rows)
+            + "</table>"
+        )
+    guests_html = ""
+    if guest_rows:
+        more = f"<p style='color:#64748b;font-size:13px;'>+{hidden} more</p>" if hidden else ""
+        guests_html = (
+            '<p style="margin:16px 0 6px;font-weight:600;">Stale or missing snapshots</p>'
+            '<table style="width:100%;border-collapse:collapse;font-size:14px;">'
+            + "\n".join(guest_rows)
+            + "</table>"
+            + more
+        )
+    body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#eef2f6;font-family:Segoe UI,Helvetica,Arial,sans-serif;">
+  <div style="max-width:620px;margin:24px auto;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 8px 32px rgba(15,28,46,0.1);">
+    <div style="background:linear-gradient(135deg,#991b1b,#dc2626);padding:28px 26px;color:#ffffff;">
+      <div style="font-size:12px;opacity:0.9;letter-spacing:0.08em;text-transform:uppercase;">RestoreProof</div>
+      <h1 style="margin:10px 0 0;font-size:24px;font-weight:700;line-height:1.3;">{html.escape(title)}</h1>
+    </div>
+    <div style="padding:26px;color:#1e293b;line-height:1.65;font-size:15px;">
+      <p style="margin-top:0;">{html.escape(str(payload.get("headline") or title))}</p>
+      <p>Restore drills for these guests are paused. A successful restore of an old snapshot is not a current backup. Enable the job in Proxmox (Datacenter → Backup) and wait for a new PBS snapshot.</p>
+      {jobs_html}
+      {guests_html}
+      <p style="font-size:14px;color:#475569;">This alert repeats daily until the job is enabled and the newest snapshot is inside the schedule.</p>
+      <a href="{dash}" style="display:inline-block;margin-top:8px;padding:13px 22px;background:#991b1b;color:#ffffff;text-decoration:none;border-radius:10px;font-weight:600;font-size:14px;">Open dashboard</a>
     </div>
   </div>
 </body>

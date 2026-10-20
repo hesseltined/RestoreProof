@@ -2,14 +2,15 @@
  * Purpose: Restore run history and evidence viewer.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-31
- * Version: 1.4.0
+ * Modified: 2026-10-07
+ * Version: 1.5.0
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { AuthenticatedImage } from "../components/AuthenticatedImage";
+import { GuestSystem } from "../components/GuestSystem";
 
 type Run = {
   id: number;
@@ -18,6 +19,7 @@ type Run = {
   source_vmid: number;
   test_vmid: number | null;
   guest_type: string;
+  os_label?: string;
   backup_volid: string;
   backup_count?: number | null;
   backup_used_index?: number | null;
@@ -170,6 +172,9 @@ export function RunsPage() {
                 </td>
                 <td>
                   {r.source_name} <span className="mono">({r.source_vmid})</span>
+                  <div className="guest-system-row">
+                    <GuestSystem guestType={r.guest_type} osLabel={r.os_label} />
+                  </div>
                 </td>
                 <td className="mono">{r.test_vmid ?? "—"}</td>
                 <td>
@@ -325,8 +330,11 @@ export function RunDetailPage() {
           {statusLabel(run.status, run.used_fallback_backup)}
         </span>
       </h1>
-      <p className="page-sub">
-        {run.source_name} ({run.source_vmid}) → test {run.test_vmid ?? "—"} · {run.guest_type}
+      <p className="page-sub guest-system-row">
+        <span>
+          {run.source_name} ({run.source_vmid}) → test {run.test_vmid ?? "—"}
+        </span>
+        <GuestSystem guestType={run.guest_type} osLabel={run.os_label} />
         {run.backup_count != null
           ? ` · ${run.backup_count} PBS backup${run.backup_count === 1 ? "" : "s"} available`
           : ""}

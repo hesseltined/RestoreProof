@@ -2,8 +2,8 @@
 Purpose: Pydantic request/response schemas.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-10-01
-Version: 1.15.0
+Modified: 2026-10-19
+Version: 1.17.0
 """
 
 from __future__ import annotations
@@ -337,8 +337,11 @@ class GuestOut(BaseModel):
     in_backup_job: bool = True
     backup_job_enabled: bool = False
     backup_job_summary: str = ""
+    backup_schedule: str = ""
     backup_snapshot_count: int = 0
     last_backup_at: Optional[datetime] = None
+    backup_health: str = ""
+    backup_health_detail: str = ""
     schedule_cron: Optional[str]
     schedule_enabled: bool
     last_tested_at: Optional[datetime]
@@ -361,6 +364,7 @@ class RunOut(BaseModel):
     source_vmid: int
     source_name: str
     guest_type: str
+    os_label: Optional[str] = ""
     test_vmid: Optional[int]
     backup_volid: str
     backup_count: Optional[int] = None
@@ -406,12 +410,38 @@ class ActiveRunOut(BaseModel):
     source_name: str
     source_vmid: int
     guest_type: str
+    os_label: Optional[str] = ""
     host_id: Optional[int] = None
     test_vmid: Optional[int] = None
     progress_pct: Optional[float] = None
     progress_label: Optional[str] = None
     started_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
+
+
+class BackupHealthJobOut(BaseModel):
+    label: str
+    guest_count: int
+    oldest_backup_at: Optional[datetime] = None
+
+
+class BackupHealthGuestOut(BaseModel):
+    vmid: int
+    name: str
+    last_backup_at: Optional[datetime] = None
+    detail: str = ""
+
+
+class BackupHealthOut(BaseModel):
+    ok: bool = True
+    headline: str = "Backups are current."
+    current_count: int = 0
+    disabled_count: int = 0
+    stale_count: int = 0
+    missing_count: int = 0
+    disabled_jobs: list[BackupHealthJobOut] = []
+    stale_guests: list[BackupHealthGuestOut] = []
+    missing_guests: list[BackupHealthGuestOut] = []
 
 
 class DashboardOut(BaseModel):
@@ -429,6 +459,7 @@ class DashboardOut(BaseModel):
     host_count: int
     next_due: Optional[GuestOut]
     active_run: Optional[ActiveRunOut] = None
+    backup_health: BackupHealthOut = Field(default_factory=BackupHealthOut)
 
 
 class StatusOut(BaseModel):

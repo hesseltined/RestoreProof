@@ -2,8 +2,8 @@
 Purpose: Outbound push notifications via ntfy using stored push settings.
 Author: Doug Hesseltine
 Created: 2026-07-31
-Modified: 2026-09-15
-Version: 1.2.0
+Modified: 2026-10-19
+Version: 1.3.0
 """
 
 from __future__ import annotations
@@ -182,5 +182,35 @@ def build_gap_push(payload: dict[str, Any], click_url: str) -> dict[str, Any]:
         ),
         "priority": "high",
         "tags": ["hourglass"],
+        "click_url": click_url,
+    }
+
+
+def build_backup_health_push(payload: dict[str, Any], click_url: str) -> dict[str, Any]:
+    disabled = int(payload.get("disabled_count") or 0)
+    stale = int(payload.get("stale_count") or 0)
+    missing = int(payload.get("missing_count") or 0)
+    if disabled:
+        title = "RestoreProof: backup job disabled"
+        priority = "urgent"
+        tags = ["rotating_light"]
+    elif stale:
+        title = "RestoreProof: backups are out of date"
+        priority = "urgent"
+        tags = ["warning"]
+    else:
+        title = "RestoreProof: backup job has no snapshot"
+        priority = "high"
+        tags = ["warning"]
+    jobs = payload.get("disabled_jobs") or []
+    job_bit = str(jobs[0].get("label") or "") if jobs else ""
+    return {
+        "title": title,
+        "message": _shorten(
+            f"{payload.get('headline') or title} {job_bit} "
+            f"Disabled {disabled}, stale {stale}, missing {missing}."
+        ),
+        "priority": priority,
+        "tags": tags,
         "click_url": click_url,
     }

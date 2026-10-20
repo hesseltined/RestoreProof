@@ -1,8 +1,8 @@
 # Purpose: Deploy RestoreProof with Portainer using Docker Hub images
 # Author: Doug Hesseltine
 # Created: 2026-07-12
-# Modified: 2026-10-01
-# Version: 1.6.7
+# Modified: 2026-10-20
+# Version: 1.6.12
 
 # Deploy with Portainer
 

@@ -2,8 +2,8 @@
 # Purpose: Build and push RestoreProof images to Docker Hub (yesitsmedoug)
 # Author: Doug Hesseltine
 # Created: 2026-07-12
-# Modified: 2026-10-01
-# Version: 1.6.7
+# Modified: 2026-10-20
+# Version: 1.6.12
 #
 # Builds linux/amd64 (Portainer / Proxmox Docker hosts) and pushes.
 # Does NOT run docker compose up / restart local containers.
@@ -13,7 +13,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="${VERSION:-1.6.7}"
+VERSION="${VERSION:-1.6.12}"
 PLATFORM="${PLATFORM:-linux/amd64}"
 REGISTRY_USER="${DOCKERHUB_USER:-yesitsmedoug}"
 IMAGE_API="${REGISTRY_USER}/restoreproof-api"

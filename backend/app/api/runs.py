@@ -2,8 +2,8 @@
 Purpose: Restore run history, evidence download, resend email, retry, pagination.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-09-15
-Version: 1.5.0
+Modified: 2026-10-07
+Version: 1.6.0
 """
 
 from __future__ import annotations
@@ -130,6 +130,7 @@ def retry_run(
         source_vmid=guest.vmid,
         source_name=guest.name,
         guest_type=guest.guest_type,
+        os_label=guest.os_label or "",
         status="queued",
         trigger="retry",
         progress_pct=0.0,

@@ -2,13 +2,14 @@
  * Purpose: Dashboard overview with live restore progress and optional setup wizard.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-31
- * Version: 1.5.0
+ * Modified: 2026-10-19
+ * Version: 1.7.0
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
+import { GuestSystem } from "../components/GuestSystem";
 import { SetupWizardPanel } from "../components/SetupWizardPanel";
 
 type Run = {
@@ -16,6 +17,8 @@ type Run = {
   guest_id?: number | null;
   source_name: string;
   source_vmid: number;
+  guest_type?: string;
+  os_label?: string;
   status: string;
   created_at: string;
   progress_pct?: number | null;
@@ -30,11 +33,31 @@ type ActiveRun = {
   source_name: string;
   source_vmid: number;
   guest_type: string;
+  os_label?: string;
   test_vmid: number | null;
   progress_pct: number | null;
   progress_label: string | null;
   started_at: string | null;
   created_at: string | null;
+};
+
+type BackupHealthGuest = {
+  vmid: number;
+  name: string;
+  last_backup_at: string | null;
+  detail: string;
+};
+
+type BackupHealth = {
+  ok: boolean;
+  headline: string;
+  current_count: number;
+  disabled_count: number;
+  stale_count: number;
+  missing_count: number;
+  disabled_jobs: { label: string; guest_count: number; oldest_backup_at: string | null }[];
+  stale_guests: BackupHealthGuest[];
+  missing_guests: BackupHealthGuest[];
 };
 
 type Dashboard = {
@@ -49,6 +72,7 @@ type Dashboard = {
   host_count: number;
   next_due: { name: string; vmid: number } | null;
   active_run: ActiveRun | null;
+  backup_health?: BackupHealth;
 };
 
 /** 0 means "all" — matches the API's recent_limit contract. */
@@ -138,6 +162,52 @@ export function DashboardPage() {
       <h1 className="page-title">Dashboard</h1>
       <p className="page-sub">Restore drill status across connected Proxmox hosts.</p>
 
+      {data.backup_health && !data.backup_health.ok && (
+        <div className="card backup-alert" role="alert">
+          <h3>
+            {data.backup_health.disabled_count
+              ? "Backup job disabled"
+              : "Backups are not current"}
+          </h3>
+          <p>{data.backup_health.headline}</p>
+          <p className="help">
+            Restore drills for these guests are paused. A restore of an old snapshot does not
+            mean the backup is current.
+            {data.backup_health.disabled_count
+              ? " Enable the job in Proxmox under Datacenter → Backup."
+              : " The job is enabled, but it has not produced a snapshot inside its schedule."}
+          </p>
+          {data.backup_health.disabled_jobs.length > 0 && (
+            <ul>
+              {data.backup_health.disabled_jobs.map((job) => (
+                <li key={job.label}>
+                  <strong>{job.label}</strong>
+                  {" · "}
+                  {job.guest_count} {job.guest_count === 1 ? "guest" : "guests"}
+                  {job.oldest_backup_at
+                    ? ` · oldest snapshot ${new Date(job.oldest_backup_at).toLocaleString()}`
+                    : " · no snapshot"}
+                </li>
+              ))}
+            </ul>
+          )}
+          {data.backup_health.stale_count > 0 && (
+            <p>
+              {data.backup_health.stale_count}{" "}
+              {data.backup_health.stale_count === 1 ? "guest has" : "guests have"} a snapshot
+              older than the job schedule
+              {data.backup_health.stale_guests.length
+                ? `: ${data.backup_health.stale_guests.map((g) => g.name).join(", ")}`
+                : ""}
+              .
+            </p>
+          )}
+          <Link className="btn secondary small" to="/guests">
+            Review guests
+          </Link>
+        </div>
+      )}
+
       <SetupWizardPanel />
 
       {active && (
@@ -149,6 +219,9 @@ export function DashboardPage() {
                 {active.source_name}{" "}
                 <span className="mono help">VMID {active.source_vmid}</span>
               </h3>
+              <div className="guest-system-row">
+                <GuestSystem guestType={active.guest_type} osLabel={active.os_label} />
+              </div>
               <p className="help" style={{ marginBottom: 0 }}>
                 {active.progress_label || (active.status === "queued" ? "Queued" : "Working…")}
                 {active.test_vmid != null ? ` · test VMID ${active.test_vmid}` : ""}
@@ -273,6 +346,9 @@ export function DashboardPage() {
                   </td>
                   <td>
                     {r.source_name} <span className="mono">({r.source_vmid})</span>
+                    <div className="guest-system-row">
+                      <GuestSystem guestType={r.guest_type || "qemu"} osLabel={r.os_label} />
+                    </div>
                   </td>
                   <td>
                     <span className="run-status-cell">

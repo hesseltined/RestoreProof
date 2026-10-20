@@ -2,8 +2,8 @@
 Purpose: App settings, SMTP, dashboard, users list, setup progress endpoints.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-09-17
-Version: 1.12.0
+Modified: 2026-10-19
+Version: 1.14.0
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from app.schemas import (
     ActiveRunOut,
     AppSettingsOut,
     AppSettingsUpdate,
+    BackupHealthOut,
     DashboardOut,
     HeartbeatOut,
     HeartbeatUpdate,
@@ -42,6 +43,7 @@ from app.schemas import (
 )
 from app.security import decrypt_secret, encrypt_secret, hash_password
 from app.services import locks
+from app.services.backup_health import fleet_backup_report
 from app.services.bootstrap import (
     get_app_settings,
     get_heartbeat_settings,
@@ -524,6 +526,12 @@ def setup_wizard_reopen(
     return {"ok": True, "setup_wizard_completed": False}
 
 
+def _backup_health_out(db: Session) -> BackupHealthOut:
+    raw = fleet_backup_report(db.query(Guest).all())
+    raw.pop("fingerprint", None)
+    return BackupHealthOut(**raw)
+
+
 @router.get("/dashboard", response_model=DashboardOut)
 def dashboard(
     recent_limit: int = Query(
@@ -553,6 +561,7 @@ def dashboard(
             source_name=active.source_name,
             source_vmid=active.source_vmid,
             guest_type=active.guest_type,
+            os_label=active.os_label or "",
             host_id=active.host_id,
             test_vmid=active.test_vmid,
             progress_pct=active.progress_pct if active.progress_pct is not None else (
@@ -588,6 +597,7 @@ def dashboard(
         host_count=db.query(ProxmoxHost).count(),
         next_due=next_out,
         active_run=active_out,
+        backup_health=_backup_health_out(db),
     )
 
 

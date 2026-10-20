@@ -2,8 +2,8 @@
 Purpose: SQLAlchemy engine and session helpers.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-10-01
-Version: 1.12.0
+Modified: 2026-10-19
+Version: 1.14.0
 """
 
 from collections.abc import Generator
@@ -58,6 +58,9 @@ def ensure_schema() -> None:
         "ALTER TABLE guests ADD COLUMN IF NOT EXISTS backup_job_summary VARCHAR(512) DEFAULT ''",
         "ALTER TABLE guests ADD COLUMN IF NOT EXISTS backup_snapshot_count INTEGER DEFAULT 0",
         "ALTER TABLE guests ADD COLUMN IF NOT EXISTS last_backup_at TIMESTAMPTZ",
+        "ALTER TABLE guests ADD COLUMN IF NOT EXISTS backup_schedule VARCHAR(120) DEFAULT ''",
+        "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS backup_health_alert_last_sent_at TIMESTAMPTZ",
+        "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS backup_health_alert_fingerprint VARCHAR(4000) DEFAULT ''",
         "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS gap_alert_enabled BOOLEAN DEFAULT TRUE",
         "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS gap_alert_hours INTEGER DEFAULT 26",
         "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS gap_alert_last_sent_at TIMESTAMPTZ",
@@ -95,6 +98,8 @@ def ensure_schema() -> None:
           AND COALESCE(s.unbacked_nudge_backfilled, FALSE) = FALSE
         """,
         "UPDATE app_settings SET unbacked_nudge_backfilled = TRUE",
+        "ALTER TABLE guests ADD COLUMN IF NOT EXISTS os_label VARCHAR(64) DEFAULT ''",
+        "ALTER TABLE restore_runs ADD COLUMN IF NOT EXISTS os_label VARCHAR(64) DEFAULT ''",
     ]
     with engine.begin() as conn:
         for stmt in statements:

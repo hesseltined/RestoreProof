@@ -2,8 +2,8 @@
 Purpose: Full restore → boot → evidence → cleanup cycle for one guest.
 Author: Doug Hesseltine
 Created: 2026-07-12
-Modified: 2026-10-01
-Version: 1.19.0
+Modified: 2026-10-19
+Version: 1.21.0
 """
 
 from __future__ import annotations
@@ -18,16 +18,19 @@ from pathlib import Path
 from typing import Optional
 
 from jinja2 import Template
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models import Guest, ProxmoxHost, RestoreRun
 from app.security import decrypt_secret
 from app.services import locks
+from app.services.backup_health import apply_job_coverage, assess_backup
 from app.services.bootstrap import get_app_settings, get_push_settings, public_app_url
 from app.services.email_templates import build_notification_context, screenshot_attachment
 from app.services.mailer import parse_addr_list, send_email
 from app.services.notifications import schedule_digest_should_wait, send_schedule_digests
+from app.services.os_label import os_label_from_ostype
 from app.services.pusher import build_run_push, send_push
 from app.services.proxmox import (
     ProxmoxAPIError,
@@ -753,6 +756,19 @@ def sync_host_guests(db: Session, host: ProxmoxHost) -> int:
             guest.disk_bytes = int(maxdisk) if maxdisk is not None else None
         except (TypeError, ValueError):
             guest.disk_bytes = None
+        node_name = guest.node or ""
+        if node_name:
+            try:
+                cfg = (
+                    client.qemu_config(node_name, int(vmid))
+                    if rtype == "qemu"
+                    else client.lxc_config(node_name, int(vmid))
+                )
+                guest.os_label = os_label_from_ostype(rtype, str(cfg.get("ostype") or ""))
+            except ProxmoxAPIError as exc:
+                logger.warning(
+                    "Could not read ostype for %s VMID %s: %s", host.name, vmid, exc
+                )
         count += 1
 
     # Apply backup-job membership and PBS snapshot inventory once the full VMID
@@ -764,9 +780,7 @@ def sync_host_guests(db: Session, host: ProxmoxHost) -> int:
             g.vmid, backup_jobs, known_vmids=seen, require_enabled=False
         )
         g.in_backup_job = covered
-        g.backup_job_enabled = any(
-            j.get("enabled", 1) not in (0, False, "0", "false", "False") for j in matching
-        )
+        apply_job_coverage(g, matching if covered else [])
         g.backup_job_summary = _backup_job_summary(matching) if matching else ""
         stamp_new_guest_if_backed_up(g, is_new=g.vmid in new_vmids)
 
@@ -795,6 +809,21 @@ def sync_host_guests(db: Session, host: ProxmoxHost) -> int:
 
     host.last_sync_at = datetime.now(timezone.utc)
     host.last_error = None
+    db.flush()
+    db.execute(
+        text(
+            """
+            UPDATE restore_runs AS r
+            SET os_label = g.os_label
+            FROM guests AS g
+            WHERE r.guest_id = g.id
+              AND g.host_id = :host_id
+              AND g.os_label <> ''
+              AND r.os_label IS DISTINCT FROM g.os_label
+            """
+        ),
+        {"host_id": host.id},
+    )
     db.commit()
     return count
 
@@ -834,9 +863,10 @@ def preflight_restore_check(
     """
     Verify a guest can actually be restore-tested, against live Proxmox state.
 
-    Checks, in order: the guest still exists on the host, it belongs to a
-    Datacenter backup job, and at least one PBS snapshot exists. Findings are
-    written back to the Guest row so the UI reflects them without a full sync.
+    Checks, in order: the guest still exists on the host, a covering backup job
+    is enabled, and the newest PBS snapshot is inside that job's schedule.
+    Findings are written back to the Guest row so the UI reflects them without
+    a full sync.
     """
     try:
         client = client or _client_for_host(host)
@@ -881,9 +911,7 @@ def preflight_restore_check(
         guest.vmid, jobs, known_vmids=known_vmids, require_enabled=False
     )
     guest.in_backup_job = covered
-    guest.backup_job_enabled = any(
-        j.get("enabled", 1) not in (0, False, "0", "false", "False") for j in matching
-    )
+    apply_job_coverage(guest, matching if covered else [])
     guest.backup_job_summary = _backup_job_summary(matching) if matching else ""
     if not covered:
         db.commit()
@@ -909,13 +937,11 @@ def preflight_restore_check(
     )
     db.commit()
 
-    if not backups:
-        job_hint = guest.backup_job_summary or "its backup job"
+    assessment = assess_backup(guest)
+    if assessment["status"] != "current":
         return PreflightResult(
             False,
-            f"No PBS backup exists yet for VMID {guest.vmid} ({guest.name}). "
-            f"It is scheduled by {job_hint} but has not produced a snapshot — "
-            "run that backup job first.",
+            f"VMID {guest.vmid} ({guest.name}): {assessment['detail']}",
             skip=True,
         )
 
@@ -1102,6 +1128,8 @@ def execute_restore_run(db: Session, run_id: int) -> None:
         run.source_name = guest.name
         run.source_vmid = guest.vmid
         run.guest_type = guest_type
+        if guest.os_label:
+            run.os_label = guest.os_label
         db.commit()
 
         client = _client_for_host(host)

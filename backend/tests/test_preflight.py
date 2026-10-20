@@ -2,12 +2,13 @@
 Purpose: Unit tests for pre-restore validation (guest exists, job, snapshot).
 Author: Doug Hesseltine
 Created: 2026-07-31
-Modified: 2026-07-31
-Version: 1.0.0
+Modified: 2026-10-19
+Version: 1.1.0
 """
 
 import asyncio
-from datetime import timezone
+import time
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -58,7 +59,10 @@ RESOURCES = [
     {"vmid": 100, "type": "qemu", "node": "pve1", "name": "dc01", "status": "running"},
 ]
 JOB = {"id": "backup-weekly", "type": "vzdump", "enabled": 1, "schedule": "sun 01:00", "vmid": "133"}
-SNAPSHOT = {"volid": "pbs:backup/ct/133/2026-07-30T00:27:56Z", "ctime": 1785457676}
+SNAPSHOT = {
+    "volid": "pbs:backup/ct/133/2026-10-19T14:00:00Z",
+    "ctime": int(time.time()) - 3600,
+}
 
 
 def test_guest_missing_from_proxmox_is_flagged() -> None:
@@ -108,6 +112,32 @@ def test_scheduled_guest_with_snapshot_passes() -> None:
     assert guest.backup_snapshot_count == 1
     assert guest.last_backup_at is not None
     assert guest.last_backup_at.tzinfo is timezone.utc
+    assert guest.backup_schedule == "sun 01:00"
+
+
+def test_disabled_backup_job_is_blocked_even_with_a_recent_snapshot() -> None:
+    guest = _guest()
+    job = {**JOB, "enabled": 0}
+    result = preflight_restore_check(
+        MagicMock(), guest, _host(), client=FakeClient(RESOURCES, [job], [SNAPSHOT])
+    )
+    assert result.ok is False
+    assert result.skip is True
+    assert "disabled" in result.reason
+
+
+def test_stale_snapshot_is_blocked() -> None:
+    guest = _guest()
+    old = {
+        "volid": "pbs:backup/ct/133/2026-07-20T15:42:28Z",
+        "ctime": int(datetime(2026, 7, 20, 15, 42, tzinfo=timezone.utc).timestamp()),
+    }
+    result = preflight_restore_check(
+        MagicMock(), guest, _host(), client=FakeClient(RESOURCES, [JOB], [old])
+    )
+    assert result.ok is False
+    assert result.skip is True
+    assert "Newest snapshot" in result.reason
 
 
 def test_unreachable_host_is_not_reported_as_missing_guest() -> None:

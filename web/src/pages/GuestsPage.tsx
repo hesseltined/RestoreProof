@@ -2,13 +2,14 @@
  * Purpose: Guest inventory with exclude, schedule override, run now.
  * Author: Doug Hesseltine
  * Created: 2026-07-12
- * Modified: 2026-07-31
- * Version: 1.10.0
+ * Modified: 2026-10-19
+ * Version: 1.11.0
  */
 
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
+import { assessBackup } from "../backupHealth";
 import {
   cronToBuilder,
   describeBuilder,
@@ -114,39 +115,47 @@ type BackupState = {
 };
 
 function backupState(g: Guest): BackupState {
-  if (!g.in_backup_job) {
+  const assessed = assessBackup(g);
+  if (assessed.status === "unprotected") {
     return {
       tone: "fail",
       label: "Not in job",
-      title:
-        "Not listed in any Proxmox backup job (Datacenter → Backup). Nothing exists to restore.",
+      title: assessed.detail,
       restorable: false,
       skipReason: "Skipped (not in backup job)",
     };
   }
-  if (!g.backup_snapshot_count) {
+  if (assessed.status === "missing") {
     return {
       tone: "fail",
       label: "No backup yet",
-      title:
-        "Covered by a backup job, but no PBS snapshot exists yet. Run that backup job first.",
+      title: assessed.detail,
       restorable: false,
       skipReason: "Skipped (no backup yet)",
     };
   }
-  if (!g.backup_job_enabled) {
+  if (assessed.status === "disabled") {
     return {
-      tone: "warn",
-      label: "In job (disabled)",
-      title: g.backup_job_summary || "Backup job exists but is disabled",
-      restorable: true,
-      skipReason: "",
+      tone: "fail",
+      label: "Job disabled",
+      title: assessed.detail,
+      restorable: false,
+      skipReason: "Skipped (backup job disabled)",
+    };
+  }
+  if (assessed.status === "stale") {
+    return {
+      tone: "fail",
+      label: "Backup stale",
+      title: assessed.detail,
+      restorable: false,
+      skipReason: "Skipped (backup is not current)",
     };
   }
   return {
     tone: "ok",
-    label: "Scheduled",
-    title: g.backup_job_summary || "Listed in an active Proxmox backup job",
+    label: "Current",
+    title: assessed.detail,
     restorable: true,
     skipReason: "",
   };
@@ -382,9 +391,9 @@ export function GuestsPage() {
                         <Link to="/schedule">Schedule</Link> for batch size and cadence.
                       </p>
                       <p>
-                        Guests must also appear in a Proxmox backup job (synced from Datacenter →
-                        Backup) and have at least one PBS snapshot. Otherwise Run now and the
-                        scheduler are blocked.
+                        Guests must be in an <em>enabled</em> Proxmox backup job and the newest
+                        PBS snapshot has to be inside that job's schedule. A disabled job, or a
+                        snapshot older than the schedule, blocks Run now and the scheduler.
                       </p>
                       <ul>
                         <li>

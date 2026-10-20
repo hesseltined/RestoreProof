@@ -2,8 +2,8 @@
 Purpose: Nightly restore digests, schedule-gap alerts, and new-guest backup nudges.
 Author: Doug Hesseltine
 Created: 2026-09-15
-Modified: 2026-10-01
-Version: 1.2.0
+Modified: 2026-10-19
+Version: 1.3.0
 """
 
 from __future__ import annotations
@@ -15,15 +15,17 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.models import Guest, ProxmoxHost, RestoreRun
+from app.services.backup_health import alert_is_due, fleet_backup_report
 from app.services.bootstrap import get_app_settings, get_push_settings, public_app_url
 from app.services.email_templates import (
+    build_backup_health_email,
     build_digest_email,
     build_gap_alert_email,
     build_unbacked_nudge_email,
     format_timestamp,
 )
 from app.services.mailer import parse_addr_list, send_email
-from app.services.pusher import build_digest_push, build_gap_push, send_push
+from app.services.pusher import build_backup_health_push, build_digest_push, build_gap_push, send_push
 from app.services.scheduler import eligible_guests, pick_next_guest, schedule_window_start
 
 logger = logging.getLogger(__name__)
@@ -404,4 +406,85 @@ async def maybe_send_unbacked_nudge(db: Session, *, now: Optional[datetime] = No
             )
     settings.unbacked_nudge_last_sent_at = now
     db.commit()
+    return delivered
+
+
+def evaluate_backup_health(db: Session, *, now: Optional[datetime] = None) -> Optional[dict]:
+    """
+    Alert payload when a monitored guest's backup job is disabled or stale.
+
+    None means every monitored guest is current, or the same problem was
+    already sent within the last day. Runs even when restore drills are paused.
+    """
+    hosts = (
+        db.query(ProxmoxHost)
+        .filter(ProxmoxHost.enabled.is_(True))
+        .all()
+    )
+    if not hosts or all(_aware(host.last_sync_at) is None for host in hosts):
+        return None
+    now = now or _now()
+    report = fleet_backup_report(db.query(Guest).all(), now)
+    if report["ok"]:
+        return None
+    settings = get_app_settings(db)
+    if not alert_is_due(
+        report["fingerprint"],
+        last_fingerprint=getattr(settings, "backup_health_alert_fingerprint", "") or "",
+        last_sent_at=_aware(getattr(settings, "backup_health_alert_last_sent_at", None)),
+        now=now,
+    ):
+        return None
+    return report
+
+
+async def _deliver_backup_health(db: Session, payload: dict) -> bool:
+    settings = get_app_settings(db)
+    app_url = public_app_url(settings)
+    delivered = False
+    to_addrs = parse_addr_list(settings.notify_to)
+    if to_addrs:
+        try:
+            subject, body = build_backup_health_email(payload, app_url)
+            await send_email(
+                db,
+                to_addrs=to_addrs,
+                subject=subject,
+                body=body,
+                cc_addrs=parse_addr_list(settings.notify_cc),
+            )
+            delivered = True
+        except Exception:  # noqa: BLE001
+            logger.exception("Backup health email failed")
+    push = get_push_settings(db)
+    if push.enabled and push.url.strip():
+        try:
+            await send_push(db, **build_backup_health_push(payload, app_url))
+            delivered = True
+        except Exception:  # noqa: BLE001
+            logger.exception("Backup health push failed")
+    return delivered
+
+
+async def maybe_send_backup_health_alert(db: Session, *, now: Optional[datetime] = None) -> bool:
+    payload = evaluate_backup_health(db, now=now)
+    if not payload:
+        return False
+    delivered = await _deliver_backup_health(db, payload)
+    settings = get_app_settings(db)
+    now = now or _now()
+    settings.backup_health_alert_fingerprint = payload["fingerprint"][:4000]
+    settings.backup_health_alert_last_sent_at = now
+    db.commit()
+    if delivered:
+        logger.warning(
+            "Backup health alert sent: disabled=%s stale=%s missing=%s",
+            payload.get("disabled_count"),
+            payload.get("stale_count"),
+            payload.get("missing_count"),
+        )
+    else:
+        logger.warning(
+            "Backup health alert due but no email/push delivered (check SMTP and ntfy settings)"
+        )
     return delivered

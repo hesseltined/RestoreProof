@@ -1,8 +1,8 @@
 # Purpose: RestoreProof — automated Proxmox PBS restore drills
 # Author: Doug Hesseltine
 # Created: 2026-07-12
-# Modified: 2026-07-22
-# Version: 1.3.0
+# Modified: 2026-10-20
+# Version: 1.6.12
 
 # RestoreProof
 

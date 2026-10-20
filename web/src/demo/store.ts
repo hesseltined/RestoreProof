@@ -2,12 +2,15 @@
  * Purpose: In-memory sample fleet for the public RestoreProof /demo walkthrough.
  * Author: Doug Hesseltine
  * Created: 2026-07-13
- * Modified: 2026-09-15
- * Version: 2.6.0
+ * Modified: 2026-10-19
+ * Version: 2.9.0
  *
- * Three themed Proxmox hosts (Milky Way, Orion, Pizza Planet), 10–30 guests each,
- * ~90 days of weekly-ish restore history with occasional failures and remediations.
+ * Datacenter servers only (Windows VMs, Linux VMs, and a few containers).
+ * Run history is synthetic so the walkthrough has evidence to open.
  */
+
+import { LIVE_BACKUP_SUMMARY, LIVE_GUESTS } from "./liveFleet";
+import { assessBackup, fleetBackupHealth } from "../backupHealth";
 
 export type DemoUser = {
   id: number;
@@ -24,6 +27,7 @@ export type DemoGuest = {
   vmid: number;
   name: string;
   guest_type: string;
+  os_label: string;
   node: string;
   status: string;
   cpu_cores: number | null;
@@ -33,6 +37,7 @@ export type DemoGuest = {
   in_backup_job: boolean;
   backup_job_enabled: boolean;
   backup_job_summary: string;
+  backup_schedule: string;
   backup_snapshot_count: number;
   last_backup_at: string | null;
   schedule_cron: string | null;
@@ -48,6 +53,7 @@ export type DemoRun = {
   source_vmid: number;
   source_name: string;
   guest_type: string;
+  os_label: string;
   test_vmid: number | null;
   backup_volid: string;
   backup_count: number | null;
@@ -290,110 +296,14 @@ function hoursFromNow(h: number): string {
   return new Date(Date.now() + h * 3600_000).toISOString();
 }
 
-/** Mirrors backend eligibility: covered by a backup job and a snapshot exists. */
+/** Current means the job is enabled and the newest snapshot is inside its schedule. */
 export function isRestorable(g: DemoGuest): boolean {
-  return g.in_backup_job && g.backup_snapshot_count > 0;
+  return assessBackup(g).status === "current";
 }
 
 function isoAt(ms: number): string {
   return new Date(ms).toISOString();
 }
-
-type GuestBlueprint = {
-  name: string;
-  guest_type: "qemu" | "lxc";
-};
-
-const MILKY_WAY_GUESTS: GuestBlueprint[] = [
-  { name: "andromeda-core", guest_type: "qemu" },
-  { name: "sagittarius-a", guest_type: "qemu" },
-  { name: "polaris-dns", guest_type: "lxc" },
-  { name: "vega-cache", guest_type: "lxc" },
-  { name: "altair-db", guest_type: "qemu" },
-  { name: "cygnus-web", guest_type: "qemu" },
-  { name: "lyra-mail", guest_type: "qemu" },
-  { name: "cassiopeia-auth", guest_type: "lxc" },
-  { name: "perseus-backup", guest_type: "qemu" },
-  { name: "phoenix-ci", guest_type: "qemu" },
-  { name: "draco-proxy", guest_type: "lxc" },
-  { name: "aquila-nfs", guest_type: "qemu" },
-  { name: "centaurus-ldap", guest_type: "lxc" },
-  { name: "hydra-mq", guest_type: "lxc" },
-  { name: "nebula-gateway", guest_type: "qemu" },
-  { name: "quasar-api", guest_type: "qemu" },
-  { name: "pulsar-metrics", guest_type: "lxc" },
-  { name: "comet-runner", guest_type: "qemu" },
-  { name: "eclipse-jump", guest_type: "qemu" },
-  { name: "nova-app", guest_type: "qemu" },
-  { name: "stellar-files", guest_type: "qemu" },
-  { name: "cosmic-wiki", guest_type: "lxc" },
-  { name: "hubble-logs", guest_type: "lxc" },
-  { name: "kepler-analytics", guest_type: "qemu" },
-  { name: "spitzer-archive", guest_type: "qemu" },
-  { name: "planck-research", guest_type: "qemu" },
-  { name: "luna-cache", guest_type: "lxc" },
-  { name: "titan-db", guest_type: "qemu" },
-  { name: "europa-web", guest_type: "qemu" },
-  { name: "callisto-ci", guest_type: "lxc" },
-];
-
-const ORION_GUESTS: GuestBlueprint[] = [
-  { name: "betelgeuse-app", guest_type: "qemu" },
-  { name: "rigel-db", guest_type: "qemu" },
-  { name: "bellatrix-web", guest_type: "qemu" },
-  { name: "mintaka-api", guest_type: "lxc" },
-  { name: "alnitak-cache", guest_type: "lxc" },
-  { name: "alnilam-mq", guest_type: "lxc" },
-  { name: "saiph-dns", guest_type: "lxc" },
-  { name: "meissa-auth", guest_type: "qemu" },
-  { name: "hunter-jump", guest_type: "qemu" },
-  { name: "belt-gateway", guest_type: "qemu" },
-  { name: "sword-runner", guest_type: "qemu" },
-  { name: "horsehead-proxy", guest_type: "lxc" },
-  { name: "flame-media", guest_type: "qemu" },
-  { name: "trapezium-ci", guest_type: "lxc" },
-  { name: "winter-hexagon", guest_type: "qemu" },
-  { name: "barnards-loop", guest_type: "qemu" },
-  { name: "orionid-edge", guest_type: "lxc" },
-  { name: "rigel-k", guest_type: "qemu" },
-  { name: "saiph-vault", guest_type: "qemu" },
-  { name: "meissa-ldap", guest_type: "lxc" },
-  { name: "belt-starlink", guest_type: "lxc" },
-  { name: "hunter-ops", guest_type: "qemu" },
-];
-
-const PIZZA_PLANET_GUESTS: GuestBlueprint[] = [
-  { name: "pepperoni-web", guest_type: "qemu" },
-  { name: "mozzarella-db", guest_type: "qemu" },
-  { name: "anchovy-dns", guest_type: "lxc" },
-  { name: "calzone-api", guest_type: "qemu" },
-  { name: "slice-cache", guest_type: "lxc" },
-  { name: "delivery-bot", guest_type: "lxc" },
-  { name: "arcade-claw", guest_type: "qemu" },
-  { name: "buzz-ci", guest_type: "qemu" },
-  { name: "woody-auth", guest_type: "lxc" },
-  { name: "rex-backup", guest_type: "qemu" },
-  { name: "hamm-proxy", guest_type: "lxc" },
-  { name: "potato-mail", guest_type: "qemu" },
-  { name: "aliens-queue", guest_type: "lxc" },
-  { name: "pizza-truck", guest_type: "qemu" },
-  { name: "oven-runner", guest_type: "qemu" },
-  { name: "dough-mixer", guest_type: "lxc" },
-  { name: "tomato-sauce", guest_type: "lxc" },
-  { name: "cheese-stretch", guest_type: "qemu" },
-  { name: "crust-edge", guest_type: "lxc" },
-  { name: "napkin-wiki", guest_type: "qemu" },
-  { name: "soda-fountain", guest_type: "lxc" },
-  { name: "arcade-token", guest_type: "qemu" },
-  { name: "rocket-ship", guest_type: "qemu" },
-  { name: "little-green-men", guest_type: "lxc" },
-  { name: "sid-sandbox", guest_type: "qemu" },
-  { name: "zurg-monitor", guest_type: "qemu" },
-  { name: "slinky-relay", guest_type: "lxc" },
-  { name: "jessie-files", guest_type: "qemu" },
-  { name: "bullseye-cdn", guest_type: "lxc" },
-  { name: "forky-dev", guest_type: "qemu" },
-];
 
 const FAIL_MESSAGES = [
   "Boot wait expired — no console activity within 90s",
@@ -403,56 +313,6 @@ const FAIL_MESSAGES = [
   "Temporary lock on PBS datastore (busy)",
   "Restore aborted: test VMID range exhausted",
 ];
-
-type HostSpec = {
-  id: number;
-  name: string;
-  api_url: string;
-  ssh_host: string;
-  nodes: string[];
-  vmidBase: number;
-  blueprints: GuestBlueprint[];
-  countMin: number;
-  countMax: number;
-  seed: number;
-};
-
-function realisticSpecs(rand: () => number, guestType: "qemu" | "lxc") {
-  if (guestType === "lxc") {
-    const cpu = pick(rand, [1, 1, 2, 2, 4]);
-    const mem = pick(rand, [512 * MiB, 1 * GiB, 2 * GiB, 4 * GiB, 8 * GiB]);
-    const disk = pick(rand, [4, 8, 16, 32, 64].map((g) => g * GiB));
-    return { cpu_cores: cpu, memory_bytes: mem, disk_bytes: disk };
-  }
-  const cpu = pick(rand, [2, 4, 4, 6, 8, 8, 12, 16]);
-  const mem = pick(rand, [4, 8, 8, 16, 16, 32, 64].map((g) => g * GiB));
-  const disk = pick(rand, [40, 80, 120, 250, 500, 1000, 2000].map((g) => g * GiB));
-  return { cpu_cores: cpu, memory_bytes: mem, disk_bytes: disk };
-}
-
-function scheduleForGuest(rand: () => number): {
-  schedule_cron: string | null;
-  schedule_enabled: boolean;
-  excluded: boolean;
-  intervalDays: number;
-} {
-  const roll = rand();
-  if (roll < 0.04) {
-    return { schedule_cron: null, schedule_enabled: false, excluded: true, intervalDays: 999 };
-  }
-  if (roll < 0.1) {
-    // Daily override (still restore-drilled a few times a week in history)
-    return { schedule_cron: "0 2 * * *", schedule_enabled: true, excluded: false, intervalDays: 4 };
-  }
-  if (roll < 0.18) {
-    return { schedule_cron: "0 3 * * 0", schedule_enabled: true, excluded: false, intervalDays: 7 };
-  }
-  if (roll < 0.24) {
-    return { schedule_cron: "0 4 1 * *", schedule_enabled: true, excluded: false, intervalDays: 28 };
-  }
-  // Fleet default — weekly-ish rotation
-  return { schedule_cron: null, schedule_enabled: true, excluded: false, intervalDays: 7 + intBetween(rand, 0, 5) };
-}
 
 function makeRun(opts: {
   id: number;
@@ -483,6 +343,7 @@ function makeRun(opts: {
       source_vmid: guest.vmid,
       source_name: guest.name,
       guest_type: guest.guest_type,
+      os_label: guest.os_label,
       test_vmid,
       backup_volid,
       backup_count,
@@ -516,6 +377,7 @@ function makeRun(opts: {
     source_vmid: guest.vmid,
     source_name: guest.name,
     guest_type: guest.guest_type,
+    os_label: guest.os_label,
     test_vmid,
     backup_volid: usedFallback
       ? `pbs:backup/${kind}/${guest.vmid}/${isoAt(createdMs - 3 * 86400_000)}`
@@ -565,116 +427,60 @@ function makeRun(opts: {
 }
 
 function buildGuestsAndRuns(rand: () => number) {
-  const hostSpecs: HostSpec[] = [
+  const hosts: DemoHost[] = [
     {
       id: 1,
-      name: "Milky Way",
-      api_url: "https://pve.milkyway.lab:8006",
-      ssh_host: "10.42.1.11",
-      nodes: ["mw-pve1", "mw-pve2"],
-      vmidBase: 100,
-      blueprints: MILKY_WAY_GUESTS,
-      countMin: 10,
-      countMax: 30,
-      seed: 1,
-    },
-    {
-      id: 2,
-      name: "Orion",
-      api_url: "https://pve.orion.lab:8006",
-      ssh_host: "10.42.2.11",
-      nodes: ["or-pve1", "or-pve2"],
-      vmidBase: 200,
-      blueprints: ORION_GUESTS,
-      countMin: 10,
-      countMax: 30,
-      seed: 2,
-    },
-    {
-      id: 3,
-      name: "Pizza Planet",
-      api_url: "https://pve.pizzaplanet.lab:8006",
-      ssh_host: "10.42.3.11",
-      nodes: ["pp-pve1", "pp-pve2", "pp-pve3"],
-      vmidBase: 300,
-      blueprints: PIZZA_PLANET_GUESTS,
-      countMin: 10,
-      countMax: 30,
-      seed: 3,
+      name: "datacenter",
+      api_url: "https://pve.datacenter.local:8006",
+      token_id: "root@pam!restoreproof",
+      verify_ssl: false,
+      ssh_host: "pve.datacenter.local",
+      ssh_port: 22,
+      ssh_user: "root",
+      ssh_private_key_path: "/data/ssh/host-1",
+      preferred_restore_storage: "",
+      test_vmid_start: 9000,
+      test_vmid_end: 9099,
+      enabled: true,
+      last_sync_at: hoursAgo(1),
+      api_ok_at: hoursAgo(1),
+      ssh_ok_at: hoursAgo(2),
+      last_error: null,
+      has_token_secret: true,
+      has_ssh_key: true,
     },
   ];
 
-  const hosts: DemoHost[] = hostSpecs.map((h, i) => ({
-    id: h.id,
-    name: h.name,
-    api_url: h.api_url,
-    token_id: "root@pam!restoreproof",
-    verify_ssl: false,
-    ssh_host: h.ssh_host,
-    ssh_port: 22,
-    ssh_user: "root",
-    ssh_private_key_path: `/data/ssh/host-${h.id}`,
-    preferred_restore_storage: "restore-test",
-    test_vmid_start: 9000,
-    test_vmid_end: 9099,
-    enabled: true,
-    last_sync_at: hoursAgo(1 + i * 3),
-    api_ok_at: hoursAgo(1 + i * 3),
-    ssh_ok_at: hoursAgo(2 + i * 2),
-    last_error: null,
-    has_token_secret: true,
-    has_ssh_key: true,
-  }));
-
-  const guests: DemoGuest[] = [];
-  let nextGuestId = 1;
-  const intervals = new Map<number, number>();
-
-  for (const h of hostSpecs) {
-    const count = intBetween(rand, h.countMin, Math.min(h.countMax, h.blueprints.length));
-    const chosen = [...h.blueprints].sort(() => rand() - 0.5).slice(0, count);
-    chosen.forEach((bp, idx) => {
-      const sched = scheduleForGuest(rand);
-      const specs = realisticSpecs(rand, bp.guest_type);
-      const guest: DemoGuest = {
-        id: nextGuestId++,
-        host_id: h.id,
-        host_name: h.name,
-        vmid: h.vmidBase + idx,
-        name: bp.name,
-        guest_type: bp.guest_type,
-        node: pick(rand, h.nodes),
-        status: rand() < 0.12 ? "stopped" : "running",
-        cpu_cores: specs.cpu_cores,
-        memory_bytes: specs.memory_bytes,
-        disk_bytes: specs.disk_bytes,
-        excluded: sched.excluded,
-        in_backup_job: rand() >= 0.08,
-        backup_job_enabled: rand() >= 0.15,
-        backup_job_summary: "backup-demo (sun 01:00)",
-        backup_snapshot_count: intBetween(rand, 3, 14),
-        last_backup_at: hoursFromNow(-intBetween(rand, 4, 60)),
-        schedule_cron: sched.schedule_cron,
-        schedule_enabled: sched.schedule_enabled,
-        last_tested_at: null,
-        next_due_at: sched.excluded ? null : hoursFromNow(intBetween(rand, 2, 72)),
-      };
-      if (!guest.in_backup_job) {
-        guest.backup_job_enabled = false;
-        guest.backup_job_summary = "";
-        guest.backup_snapshot_count = 0;
-        guest.last_backup_at = null;
-        guest.next_due_at = null;
-      } else if (rand() < 0.05) {
-        // Newly added guest: covered by a job but no snapshot has run yet.
-        guest.backup_snapshot_count = 0;
-        guest.last_backup_at = null;
-        guest.next_due_at = null;
-      }
-      guests.push(guest);
-      intervals.set(guest.id, sched.intervalDays);
-    });
-  }
+  const guests: DemoGuest[] = LIVE_GUESTS.map((bp, idx) => {
+    const restorable = !bp.excluded && bp.in_backup_job && bp.backup_snapshot_count > 0;
+    return {
+      id: idx + 1,
+      host_id: 1,
+      host_name: "datacenter",
+      vmid: bp.vmid,
+      name: bp.name,
+      guest_type: bp.guest_type,
+      os_label: bp.os_label,
+      node: "dc-pve1",
+      status: bp.status,
+      cpu_cores: bp.cpu_cores,
+      memory_bytes: bp.memory_bytes,
+      disk_bytes: bp.disk_bytes,
+      excluded: bp.excluded,
+      in_backup_job: bp.in_backup_job,
+      backup_job_enabled: bp.backup_job_enabled,
+      backup_job_summary: bp.in_backup_job ? LIVE_BACKUP_SUMMARY : "",
+      backup_schedule: bp.in_backup_job ? "sun 01:00" : "",
+      backup_snapshot_count: bp.backup_snapshot_count,
+      last_backup_at: bp.backup_snapshot_count > 0 ? hoursAgo(6 + (idx % 18)) : null,
+      schedule_cron: null,
+      schedule_enabled: true,
+      last_tested_at: null,
+      next_due_at: restorable ? hoursFromNow(4 + (idx % 40)) : null,
+    };
+  });
+  const intervals = new Map<number, number>(guests.map((g) => [g.id, 7]));
+  const nextGuestId = guests.length + 1;
 
   const runs: DemoRun[] = [];
   let nextRunId = 1000;
@@ -757,6 +563,23 @@ function buildGuestsAndRuns(rand: () => number) {
     );
   }
 
+  // Newest runs are the Windows VMs that already have live console screenshots,
+  // so the host card and the top of Runs open on a Windows desktop.
+  for (const [index, name] of ["DC1", "Win11Pro", "FS1"].entries()) {
+    const guest = guests.find((g) => g.name === name);
+    if (!guest) continue;
+    runs.push(
+      makeRun({
+        id: nextRunId++,
+        guest,
+        createdMs: now - (12 + index * 8) * 60_000,
+        status: "success",
+        trigger: "schedule",
+        rand,
+      })
+    );
+  }
+
   // Keep only last 90 days; cap volume for UI
   const cutoff = now - HISTORY_DAYS * 86400_000;
   let kept = runs.filter((r) => new Date(r.created_at).getTime() >= cutoff);
@@ -800,10 +623,10 @@ function createStore() {
 
   const settings: DemoSettings = {
     branding_title: "RestoreProof",
-    boot_wait_seconds: 90,
+    boot_wait_seconds: 60,
     retention_days: 90,
     retention_max_runs: 500,
-    global_cron: "0 2 * * 0",
+    global_cron: "45 3 * * *",
     schedule_enabled: true,
     schedule_batch_size: 5,
     schedule_coverage_goal: "weekly",
@@ -966,6 +789,17 @@ export function hostWithLatest(host: DemoHost) {
   };
 }
 
+/** Rough tick counts so a daily cron is not described as a weekly Sunday job. */
+function cronCadence(cron: string): { ticksWeek: number; ticksMonth: number; perDay: number } {
+  const parts = cron.trim().split(/\s+/);
+  const dom = parts[2] ?? "*";
+  const dow = parts[4] ?? "*";
+  if (dom !== "*") return { ticksWeek: 0.25, ticksMonth: 1, perDay: 1 / 30 };
+  if (dow === "*") return { ticksWeek: 7, ticksMonth: 30, perDay: 1 };
+  const days = dow.split(",").filter(Boolean).length || 1;
+  return { ticksWeek: days, ticksMonth: days * 4, perDay: days / 7 };
+}
+
 export function buildSchedulePlan() {
   const s = store.settings;
   const total = store.guests.length;
@@ -978,10 +812,11 @@ export function buildSchedulePlan() {
     (g) => !g.excluded && g.schedule_enabled && isRestorable(g)
   ).length;
   const batch = Math.max(1, s.schedule_batch_size);
-  const ticksWeek = 1; // Sunday cron
-  const ticksMonth = 4;
+  const cadence = cronCadence(s.global_cron);
+  const ticksWeek = cadence.ticksWeek;
+  const ticksMonth = cadence.ticksMonth;
   const ticksToCover = eligible ? Math.ceil(eligible / batch) : 0;
-  const days = Math.round(ticksToCover * 7 * 10) / 10;
+  const days = Math.round((ticksToCover / cadence.perDay) * 10) / 10;
   return {
     total_guests: total,
     excluded_count: excluded,
@@ -1004,7 +839,7 @@ export function buildSchedulePlan() {
     summary:
       eligible === 0
         ? "No eligible guests — un-exclude VMs on the Guests page."
-        : `${batch} restore(s) per weekly tick · ${eligible} eligible · ~${ticksToCover} ticks (~${Math.round(days)} days) for a full cycle.`,
+        : `${batch} restore(s) per schedule tick · ~${ticksWeek} ticks/week · ${eligible} eligible · ~${Math.round(days)} days for a full cycle.`,
   };
 }
 
@@ -1033,6 +868,7 @@ export function buildDashboard(recentLimit = 10) {
     guest_count: store.guests.length,
     excluded_count: excluded,
     host_count: store.hosts.length,
+    backup_health: fleetBackupHealth(store.guests),
     next_due: nextDue,
     active_run: active
       ? {
@@ -1041,6 +877,7 @@ export function buildDashboard(recentLimit = 10) {
           source_name: active.source_name,
           source_vmid: active.source_vmid,
           guest_type: active.guest_type,
+          os_label: active.os_label,
           host_id: active.host_id,
           test_vmid: active.test_vmid,
           progress_pct: active.progress_pct,
